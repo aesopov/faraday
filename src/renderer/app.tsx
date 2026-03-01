@@ -1,9 +1,11 @@
 import { FsNode } from 'fss-lang';
+import type { LayeredResolver } from 'fss-lang';
 import { createFsNode } from 'fss-lang/helpers';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { detectLang } from '../langDetect';
 import { FileList } from './FileList';
 import { DirectoryHandle, type HandleMeta } from './fsa';
+import { createPanelResolver, syncLayers } from './fss';
 import { basename, dirname, join } from './path';
 
 function buildParentChain(dirPath: string): FsNode | undefined {
@@ -46,41 +48,79 @@ function handleToFsNode(handle: FileSystemHandle & { meta?: HandleMeta }, dirPat
   });
 }
 
-export function App() {
-  const [currentPath, setCurrentPath] = useState('');
-  const [parentNode, setParentNode] = useState<FsNode | undefined>(undefined);
-  const [entries, setEntries] = useState<FsNode[]>([]);
-  const [error, setError] = useState<string | null>(null);
+interface PanelState {
+  currentPath: string;
+  parentNode?: FsNode;
+  entries: FsNode[];
+  error: string | null;
+}
+
+const emptyPanel: PanelState = { currentPath: '', parentNode: undefined, entries: [], error: null };
+
+function usePanel() {
+  const [state, setState] = useState<PanelState>(emptyPanel);
+  const resolverRef = useRef<LayeredResolver>(createPanelResolver());
 
   const navigateTo = useCallback(async (path: string) => {
     try {
-      setError(null);
+      await syncLayers(resolverRef.current, path);
       const dirHandle = new DirectoryHandle(path);
       const parent = buildParentChain(path);
       const nodes: FsNode[] = [];
       for await (const [, handle] of dirHandle.entries()) {
         nodes.push(handleToFsNode(handle, path, parent));
       }
-      setCurrentPath(path);
-      setParentNode(parent);
-      setEntries(nodes);
+      setState({ currentPath: path, parentNode: parent, entries: nodes, error: null });
     } catch (err) {
-      setError(`Failed to read directory: ${err}`);
+      setState((prev) => ({ ...prev, error: `Failed to read directory: ${err}` }));
     }
   }, []);
 
-  useEffect(() => {
-    window.electron.utils.getHomePath().then(navigateTo);
-  }, [navigateTo]);
+  return { ...state, navigateTo, resolver: resolverRef.current };
+}
 
-  if (!currentPath) {
+type PanelSide = 'left' | 'right';
+
+export function App() {
+  const left = usePanel();
+  const right = usePanel();
+  const [activePanel, setActivePanel] = useState<PanelSide>('left');
+
+  useEffect(() => {
+    window.electron.utils.getHomePath().then((home) => {
+      left.navigateTo(home);
+      right.navigateTo(home);
+    });
+  }, []);
+
+  // Tab switches panels
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        setActivePanel((s) => (s === 'left' ? 'right' : 'left'));
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  if (!left.currentPath || !right.currentPath) {
     return <div className="loading">Loading...</div>;
   }
 
   return (
     <div className="app">
-      {error && <div className="error">{error}</div>}
-      <FileList currentPath={currentPath} parentNode={parentNode} entries={entries} onNavigate={navigateTo} />
+      <div className="panels">
+        <div className={`panel ${activePanel === 'left' ? 'active' : ''}`} onClick={() => setActivePanel('left')}>
+          {left.error && <div className="error">{left.error}</div>}
+          <FileList currentPath={left.currentPath} parentNode={left.parentNode} entries={left.entries} onNavigate={left.navigateTo} active={activePanel === 'left'} resolver={left.resolver} />
+        </div>
+        <div className={`panel ${activePanel === 'right' ? 'active' : ''}`} onClick={() => setActivePanel('right')}>
+          {right.error && <div className="error">{right.error}</div>}
+          <FileList currentPath={right.currentPath} parentNode={right.parentNode} entries={right.entries} onNavigate={right.navigateTo} active={activePanel === 'right'} resolver={right.resolver} />
+        </div>
+      </div>
     </div>
   );
 }

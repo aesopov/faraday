@@ -1,16 +1,18 @@
+import { DirectoryHandle } from './fsa';
+
 const MAX_SIZE = 200;
 
 // LRU cache using Map insertion order
 const cache = new Map<string, string>();
-const pending = new Set<string>();
-let iconsDir: string | null = null;
+const pending = new Map<string, Promise<void>>();
+let iconsDirHandle: DirectoryHandle | null = null;
 
-async function ensureIconsDir(): Promise<string> {
-  if (!iconsDir) {
+async function ensureIconsDir(): Promise<DirectoryHandle> {
+  if (!iconsDirHandle) {
     const appPath = await window.electron.utils.getAppPath();
-    iconsDir = appPath + '/assets/icons';
+    iconsDirHandle = new DirectoryHandle(appPath + '/assets/icons');
   }
-  return iconsDir;
+  return iconsDirHandle;
 }
 
 function svgToDataUrl(svg: string): string {
@@ -34,14 +36,21 @@ function evictIfNeeded(): void {
 
 export async function loadIcons(names: string[]): Promise<void> {
   const dir = await ensureIconsDir();
-  const toLoad = names.filter((n) => !cache.has(n) && !pending.has(n));
-  if (toLoad.length === 0) return;
+  const promises: Promise<void>[] = [];
 
-  await Promise.all(
-    toLoad.map(async (name) => {
-      pending.add(name);
+  for (const name of names) {
+    if (cache.has(name)) continue;
+
+    if (pending.has(name)) {
+      promises.push(pending.get(name)!);
+      continue;
+    }
+
+    const p = (async () => {
       try {
-        const content = await window.electron.fsa.readFile(`${dir}/${name}`);
+        const handle = await dir.getFileHandle(name);
+        const file = await handle.getFile();
+        const content = await file.text();
         cache.set(name, svgToDataUrl(content));
         evictIfNeeded();
       } catch {
@@ -49,8 +58,12 @@ export async function loadIcons(names: string[]): Promise<void> {
       } finally {
         pending.delete(name);
       }
-    }),
-  );
+    })();
+    pending.set(name, p);
+    promises.push(p);
+  }
+
+  await Promise.all(promises);
 }
 
 export function getCachedIconUrl(name: string): string | undefined {

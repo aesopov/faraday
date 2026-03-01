@@ -25,6 +25,37 @@ body {
   height: 100%;
 }
 
+.panels {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid #313244;
+}
+
+.panel + .panel {
+  border-left: none;
+}
+
+.panel.active {
+  border-color: #585b70;
+}
+
+.panel.active .path-bar {
+  background: #1e1e2e;
+  color: #cdd6f4;
+}
+
+.panel:not(.active) .entry.selected {
+  background: #252536;
+}
+
 .loading {
   display: flex;
   align-items: center;

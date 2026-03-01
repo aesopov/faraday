@@ -19,6 +19,9 @@ export interface ElectronBridge {
   fsa: {
     entries(dirPath: string): Promise<FsaRawEntry[]>;
     readFile(filePath: string): Promise<string>;
+    stat(filePath: string): Promise<{ size: number; mtimeMs: number }>;
+    exists(filePath: string): Promise<boolean>;
+    readSlice(filePath: string, offset: number, length: number): Promise<ArrayBuffer>;
   };
   utils: {
     getAppPath(): Promise<string>;

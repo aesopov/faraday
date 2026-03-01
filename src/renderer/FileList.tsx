@@ -1,4 +1,5 @@
 import { FsNode } from 'fss-lang';
+import type { LayeredResolver } from 'fss-lang';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { resolveEntryStyle } from './fss';
@@ -12,6 +13,8 @@ interface FileListProps {
   parentNode?: FsNode;
   entries: FsNode[];
   onNavigate: (path: string) => void;
+  active: boolean;
+  resolver: LayeredResolver;
 }
 
 function formatSize(sizeValue: unknown): string {
@@ -37,7 +40,7 @@ function getIconUrl(iconName: string | null, isDirectory: boolean): string | und
   return getCachedIconUrl(isDirectory ? 'folder.svg' : 'file.svg');
 }
 
-export function FileList({ currentPath, parentNode, entries, onNavigate }: FileListProps) {
+export function FileList({ currentPath, parentNode, entries, onNavigate, active, resolver }: FileListProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [, setIconsVersion] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -49,7 +52,7 @@ export function FileList({ currentPath, parentNode, entries, onNavigate }: FileL
       entry = { ...entry, parent: parentNode };
       return {
         entry,
-        style: resolveEntryStyle(entry),
+        style: resolveEntryStyle(resolver, entry),
       };
     });
 
@@ -74,7 +77,7 @@ export function FileList({ currentPath, parentNode, entries, onNavigate }: FileL
     }[] = [];
     if (parentNode) {
       const expandedParentNode = { ...parentNode, stateFlags: 1 };
-      const parentStyle = resolveEntryStyle(expandedParentNode);
+      const parentStyle = resolveEntryStyle(resolver, expandedParentNode);
       result.push({ entry: { ...expandedParentNode, name: '..' }, style: parentStyle });
     }
     for (const item of sorted) {
@@ -141,8 +144,10 @@ export function FileList({ currentPath, parentNode, entries, onNavigate }: FileL
     }
   }, [currentPath, onNavigate]);
 
-  // Keyboard navigation
+  // Keyboard navigation (only when active)
   useEffect(() => {
+    if (!active) return;
+
     const handleKeyDown = (e: KeyboardEvent) => {
       switch (e.key) {
         case 'ArrowUp':
@@ -186,7 +191,7 @@ export function FileList({ currentPath, parentNode, entries, onNavigate }: FileL
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentPath, displayEntries, selectedIndex, isRoot, onNavigate, navigateToEntry]);
+  }, [active, currentPath, displayEntries, selectedIndex, isRoot, onNavigate, navigateToEntry]);
 
   return (
     <div className="file-list">

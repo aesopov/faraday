@@ -43,6 +43,31 @@ ipcMain.handle('fsa:readFile', async (_event, filePath: string) => {
   return fs.readFile(filePath, 'utf-8');
 });
 
+ipcMain.handle('fsa:stat', async (_event, filePath: string) => {
+  const s = await fs.stat(filePath);
+  return { size: s.size, mtimeMs: s.mtimeMs };
+});
+
+ipcMain.handle('fsa:exists', async (_event, filePath: string) => {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('fsa:readSlice', async (_event, filePath: string, offset: number, length: number) => {
+  const fd = await fs.open(filePath, 'r');
+  try {
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await fd.read(buffer, 0, length, offset);
+    return buffer.buffer.slice(0, bytesRead);
+  } finally {
+    await fd.close();
+  }
+});
+
 ipcMain.handle('utils:getAppPath', () =>
   app.isPackaged ? process.resourcesPath : app.getAppPath(),
 );
