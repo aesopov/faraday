@@ -83,6 +83,9 @@ function getAncestors(dirPath: string): string[] {
 
 function usePanel(theme: ThemeKind) {
   const [state, setState] = useState<PanelState>(emptyPanel);
+  const [navigating, setNavigating] = useState(false);
+  const navTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const navAbortRef = useRef<AbortController | null>(null);
   const resolverRef = useRef<LayeredResolver | null>(null);
   if (!resolverRef.current) {
     resolverRef.current = createPanelResolver(theme);
@@ -107,21 +110,55 @@ function usePanel(theme: ThemeKind) {
   }, []);
 
   const navigateTo = useCallback(async (path: string) => {
+    navAbortRef.current?.abort();
+    const abort = new AbortController();
+    navAbortRef.current = abort;
+
+    navTimerRef.current = setTimeout(() => setNavigating(true), 300);
     try {
-      currentPathRef.current = path;
-      await syncLayers(resolverRef.current!, path);
-      const dirHandle = new DirectoryHandle(path);
-      const parent = buildParentChain(path);
-      const nodes: FsNode[] = [];
-      for await (const [, handle] of dirHandle.entries()) {
-        nodes.push(handleToFsNode(handle, path, parent));
-      }
-      setState({ currentPath: path, parentNode: parent, entries: nodes, error: null });
-      setupWatches(path);
+      const work = (async () => {
+        currentPathRef.current = path;
+        await syncLayers(resolverRef.current!, path);
+        if (abort.signal.aborted) return;
+        const dirHandle = new DirectoryHandle(path);
+        const parent = buildParentChain(path);
+        const nodes: FsNode[] = [];
+        for await (const [, handle] of dirHandle.entries()) {
+          if (abort.signal.aborted) return;
+          nodes.push(handleToFsNode(handle, path, parent));
+        }
+        if (abort.signal.aborted) return;
+        setState({ currentPath: path, parentNode: parent, entries: nodes, error: null });
+        setupWatches(path);
+      })();
+      // Suppress unhandled rejection from orphaned work after abort
+      work.catch(() => {});
+      await Promise.race([
+        work,
+        new Promise<void>((resolve) => {
+          abort.signal.addEventListener('abort', () => resolve(), { once: true });
+        }),
+      ]);
     } catch (err) {
-      setState((prev) => ({ ...prev, error: `Failed to read directory: ${err}` }));
+      if (!abort.signal.aborted) {
+        setState((prev) => ({ ...prev, error: `Failed to read directory: ${err}` }));
+      }
+    } finally {
+      clearTimeout(navTimerRef.current!);
+      navTimerRef.current = null;
+      setNavigating(false);
     }
   }, [setupWatches]);
+
+  const cancelNavigation = useCallback(() => {
+    navAbortRef.current?.abort();
+    navAbortRef.current = null;
+    if (navTimerRef.current) {
+      clearTimeout(navTimerRef.current);
+      navTimerRef.current = null;
+    }
+    setNavigating(false);
+  }, []);
 
   // Initialize observer once
   useEffect(() => {
@@ -205,7 +242,7 @@ function usePanel(theme: ThemeKind) {
   const navigateToRef = useRef(navigateTo);
   navigateToRef.current = navigateTo;
 
-  return { ...state, navigateTo, resolver: resolverRef.current! };
+  return { ...state, navigateTo, navigating, cancelNavigation, resolver: resolverRef.current! };
 }
 
 type PanelSide = 'left' | 'right';
@@ -237,12 +274,15 @@ export function App() {
     });
   }, []);
 
-  // Tab switches panels
+  // Tab switches panels, Escape cancels navigation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Tab') {
         e.preventDefault();
         actionQueue.enqueue(() => setActivePanel((s) => (s === 'left' ? 'right' : 'left')));
+      } else if (e.key === 'Escape') {
+        left.cancelNavigation();
+        right.cancelNavigation();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -257,6 +297,7 @@ export function App() {
     <div className="app">
       <div className="panels">
         <div className={`panel ${activePanel === 'left' ? 'active' : ''}`} onClick={() => setActivePanel('left')}>
+          {left.navigating && <div className="panel-progress" />}
           {left.error && <div className="error">{left.error}</div>}
           <FileList
             currentPath={left.currentPath}
@@ -269,6 +310,7 @@ export function App() {
           />
         </div>
         <div className={`panel ${activePanel === 'right' ? 'active' : ''}`} onClick={() => setActivePanel('right')}>
+          {right.navigating && <div className="panel-progress" />}
           {right.error && <div className="error">{right.error}</div>}
           <FileList
             currentPath={right.currentPath}
