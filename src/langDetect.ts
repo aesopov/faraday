@@ -425,8 +425,8 @@ const nameMap: Record<string, string> = {
   '.gitconfig': 'git',
   '.gitmodules': 'git',
   '.gitattributes': 'git',
-  'COMMIT_EDITMSG': 'git-commit',
-  'MERGE_MSG': 'git-commit',
+  COMMIT_EDITMSG: 'git-commit',
+  MERGE_MSG: 'git-commit',
   'git-rebase-todo': 'git-rebase',
 
   // Ignore files
@@ -440,15 +440,15 @@ const nameMap: Record<string, string> = {
   '.vscodeignore': 'ignore',
 
   // Makefile
-  'Makefile': 'makefile',
-  'makefile': 'makefile',
-  'GNUmakefile': 'makefile',
-  'Justfile': 'makefile',
-  'justfile': 'makefile',
+  Makefile: 'makefile',
+  makefile: 'makefile',
+  GNUmakefile: 'makefile',
+  Justfile: 'makefile',
+  justfile: 'makefile',
 
   // Docker
-  'Dockerfile': 'dockerfile',
-  'Containerfile': 'dockerfile',
+  Dockerfile: 'dockerfile',
+  Containerfile: 'dockerfile',
   'docker-compose.yml': 'dockercompose',
   'docker-compose.yaml': 'dockercompose',
   'compose.yml': 'dockercompose',
@@ -464,7 +464,7 @@ const nameMap: Record<string, string> = {
   'constraints.txt': 'pip-requirements',
 
   // Hosts
-  'hosts': 'hosts',
+  hosts: 'hosts',
 
   // Nginx
   'nginx.conf': 'nginx',

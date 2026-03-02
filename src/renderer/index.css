@@ -4,11 +4,43 @@
   box-sizing: border-box;
 }
 
+:root {
+  --bg: #1e1e2e;
+  --fg: #cdd6f4;
+  --bg-secondary: #181825;
+  --fg-secondary: #a6adc8;
+  --fg-muted: #6c7086;
+  --border: #313244;
+  --border-active: #585b70;
+  --entry-hover: #252536;
+  --entry-selected: #313244;
+  --entry-selected-fg: #f5e0dc;
+  --entry-selected-inactive: #252536;
+  --error-bg: #45243a;
+  --error-fg: #f38ba8;
+}
+
+[data-theme='light'] {
+  --bg: #eff1f5;
+  --fg: #4c4f69;
+  --bg-secondary: #e6e9ef;
+  --fg-secondary: #6c6f85;
+  --fg-muted: #9ca0b0;
+  --border: #ccd0da;
+  --border-active: #8c8fa1;
+  --entry-hover: #e6e9ef;
+  --entry-selected: #ccd0da;
+  --entry-selected-fg: #4c4f69;
+  --entry-selected-inactive: #e6e9ef;
+  --error-bg: #fce4e4;
+  --error-fg: #d20f39;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: 13px;
-  background: #1e1e2e;
-  color: #cdd6f4;
+  background: var(--bg);
+  color: var(--fg);
   overflow: hidden;
   height: 100vh;
 }
@@ -36,7 +68,7 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  border: 1px solid #313244;
+  border: 1px solid var(--border);
 }
 
 .panel + .panel {
@@ -44,16 +76,16 @@ body {
 }
 
 .panel.active {
-  border-color: #585b70;
+  border-color: var(--border-active);
 }
 
 .panel.active .path-bar {
-  background: #1e1e2e;
-  color: #cdd6f4;
+  background: var(--bg);
+  color: var(--fg);
 }
 
 .panel:not(.active) .entry.selected {
-  background: #252536;
+  background: var(--entry-selected-inactive);
 }
 
 .loading {
@@ -61,13 +93,13 @@ body {
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: #6c7086;
+  color: var(--fg-muted);
 }
 
 .error {
   padding: 6px 12px;
-  background: #45243a;
-  color: #f38ba8;
+  background: var(--error-bg);
+  color: var(--error-fg);
   font-size: 12px;
 }
 
@@ -79,11 +111,11 @@ body {
 
 .path-bar {
   padding: 8px 12px;
-  background: #181825;
-  color: #a6adc8;
+  background: var(--bg-secondary);
+  color: var(--fg-secondary);
   font-size: 12px;
   font-family: monospace;
-  border-bottom: 1px solid #313244;
+  border-bottom: 1px solid var(--border);
   user-select: none;
   flex-shrink: 0;
 }
@@ -103,12 +135,12 @@ body {
 }
 
 .entry:hover {
-  background: #252536;
+  background: var(--entry-hover);
 }
 
 .entry.selected {
-  background: #313244;
-  color: #f5e0dc;
+  background: var(--entry-selected);
+  color: var(--entry-selected-fg);
 }
 
 .entry-icon {
@@ -125,7 +157,7 @@ body {
 }
 
 .entry-size {
-  color: #6c7086;
+  color: var(--fg-muted);
   font-size: 12px;
   font-family: monospace;
   flex-shrink: 0;

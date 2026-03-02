@@ -100,7 +100,9 @@ export function FileList({ currentPath, parentNode, entries, onNavigate, active,
     loadIcons(neededIcons).then(() => {
       if (!cancelled) setIconsVersion((n) => n + 1);
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [neededIcons]);
 
   const virtualizer = useVirtualizer({
@@ -136,13 +138,16 @@ export function FileList({ currentPath, parentNode, entries, onNavigate, active,
 
   const isRoot = currentPath === '/';
 
-  const navigateToEntry = useCallback((entry: FsNode) => {
-    if (entry.name === '..') {
-      onNavigate(dirname(currentPath));
-    } else if (entry.type === 'folder') {
-      onNavigate(join(currentPath, entry.name));
-    }
-  }, [currentPath, onNavigate]);
+  const navigateToEntry = useCallback(
+    (entry: FsNode) => {
+      if (entry.name === '..') {
+        onNavigate(dirname(currentPath));
+      } else if (entry.type === 'folder') {
+        onNavigate(join(currentPath, entry.name));
+      }
+    },
+    [currentPath, onNavigate],
+  );
 
   // Keyboard navigation (only when active)
   useEffect(() => {

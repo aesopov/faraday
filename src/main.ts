@@ -1,5 +1,6 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron';
 import started from 'electron-squirrel-startup';
+import { watch, type FSWatcher } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -57,22 +58,131 @@ ipcMain.handle('fsa:exists', async (_event, filePath: string) => {
   }
 });
 
-ipcMain.handle('fsa:readSlice', async (_event, filePath: string, offset: number, length: number) => {
+// Open file descriptors — keyed by webContents id, then fdId
+type NodeFileHandle = Awaited<ReturnType<typeof fs.open>>;
+const openFdsByContents = new Map<number, Map<string, NodeFileHandle>>();
+let nextFdId = 0;
+
+function getOpenFdMap(contentsId: number): Map<string, NodeFileHandle> {
+  let map = openFdsByContents.get(contentsId);
+  if (!map) {
+    map = new Map();
+    openFdsByContents.set(contentsId, map);
+  }
+  return map;
+}
+
+function closeAllFdsForContents(contentsId: number): void {
+  const map = openFdsByContents.get(contentsId);
+  if (!map) return;
+  for (const fd of map.values()) fd.close().catch(() => {});
+  map.clear();
+  openFdsByContents.delete(contentsId);
+}
+
+ipcMain.handle('fsa:open', async (event, filePath: string) => {
   const fd = await fs.open(filePath, 'r');
-  try {
-    const buffer = Buffer.alloc(length);
-    const { bytesRead } = await fd.read(buffer, 0, length, offset);
-    return buffer.buffer.slice(0, bytesRead);
-  } finally {
+  const fdId = `fd-${nextFdId++}`;
+  getOpenFdMap(event.sender.id).set(fdId, fd);
+  return fdId;
+});
+
+ipcMain.handle('fsa:read', async (event, fdId: string, offset: number, length: number) => {
+  const fd = openFdsByContents.get(event.sender.id)?.get(fdId);
+  if (!fd) throw new Error('Invalid file descriptor');
+  const buffer = Buffer.alloc(length);
+  const { bytesRead } = await fd.read(buffer, 0, length, offset);
+  return buffer.buffer.slice(0, bytesRead);
+});
+
+ipcMain.handle('fsa:close', async (event, fdId: string) => {
+  const map = openFdsByContents.get(event.sender.id);
+  if (!map) return;
+  const fd = map.get(fdId);
+  if (fd) {
+    map.delete(fdId);
     await fd.close();
   }
 });
 
-ipcMain.handle('utils:getAppPath', () =>
-  app.isPackaged ? process.resourcesPath : app.getAppPath(),
-);
+// File system watchers — keyed by webContents id, then watchId
+const watchersByContents = new Map<number, Map<string, FSWatcher>>();
+
+function getWatcherMap(contentsId: number): Map<string, FSWatcher> {
+  let map = watchersByContents.get(contentsId);
+  if (!map) {
+    map = new Map();
+    watchersByContents.set(contentsId, map);
+  }
+  return map;
+}
+
+function closeAllWatchersForContents(contentsId: number): void {
+  const map = watchersByContents.get(contentsId);
+  if (!map) return;
+  for (const watcher of map.values()) watcher.close();
+  map.clear();
+  watchersByContents.delete(contentsId);
+}
+
+ipcMain.handle('fsa:watch', async (event, watchId: string, dirPath: string) => {
+  try {
+    await fs.access(dirPath);
+  } catch {
+    return { ok: false };
+  }
+
+  const contentsId = event.sender.id;
+  const map = getWatcherMap(contentsId);
+
+  // Close existing watcher with same ID
+  map.get(watchId)?.close();
+
+  const watcher = watch(dirPath, async (eventType, filename) => {
+    if (event.sender.isDestroyed()) return;
+    let type: string;
+    if (eventType === 'rename') {
+      try {
+        await fs.access(path.join(dirPath, filename ?? ''));
+        type = 'appeared';
+      } catch {
+        type = 'disappeared';
+      }
+    } else if (eventType === 'change') {
+      type = 'modified';
+    } else {
+      type = 'unknown';
+    }
+    event.sender.send('fsa:change', { watchId, type, name: filename ?? null });
+  });
+
+  watcher.on('error', () => {
+    if (!event.sender.isDestroyed()) {
+      event.sender.send('fsa:change', { watchId, type: 'errored', name: null });
+    }
+    watcher.close();
+    map.delete(watchId);
+  });
+
+  map.set(watchId, watcher);
+  return { ok: true };
+});
+
+ipcMain.handle('fsa:unwatch', async (event, watchId: string) => {
+  const map = watchersByContents.get(event.sender.id);
+  if (!map) return;
+  const watcher = map.get(watchId);
+  if (watcher) {
+    watcher.close();
+    map.delete(watchId);
+  }
+});
+
+ipcMain.handle('utils:getAppPath', () => (app.isPackaged ? process.resourcesPath : app.getAppPath()));
 
 ipcMain.handle('utils:getHomePath', () => os.homedir());
+
+ipcMain.handle('theme:get', () => (nativeTheme.shouldUseDarkColors ? 'dark' : 'light'));
 
 const createWindow = () => {
   const mainWindow = new BrowserWindow({
@@ -81,6 +191,22 @@ const createWindow = () => {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
     },
+  });
+
+  nativeTheme.on('updated', () => {
+    mainWindow.webContents.send('theme:changed', nativeTheme.shouldUseDarkColors ? 'dark' : 'light');
+  });
+
+  const contentsId = mainWindow.webContents.id;
+
+  // Clean up watchers and open fds on reload or window close
+  mainWindow.webContents.on('did-start-navigation', () => {
+    closeAllWatchersForContents(contentsId);
+    closeAllFdsForContents(contentsId);
+  });
+  mainWindow.webContents.on('destroyed', () => {
+    closeAllWatchersForContents(contentsId);
+    closeAllFdsForContents(contentsId);
   });
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
@@ -96,6 +222,11 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('will-quit', () => {
+  for (const contentsId of watchersByContents.keys()) closeAllWatchersForContents(contentsId);
+  for (const contentsId of openFdsByContents.keys()) closeAllFdsForContents(contentsId);
 });
 
 app.on('activate', () => {

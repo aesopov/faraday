@@ -1,4 +1,4 @@
-import { createLayer, FsNode, LayeredResolver, LayerPriority, type StyleLayer } from 'fss-lang';
+import { createLayer, FsNode, LayeredResolver, LayerPriority, type StyleLayer, type ThemeKind } from 'fss-lang';
 import type { ResolvedEntryStyle } from '../types';
 // eslint-disable-next-line import/no-unresolved
 import fssSource from './material-icons.fs.css?raw';
@@ -9,10 +9,14 @@ const baseLayer = createLayer(fssSource, '/', LayerPriority.GLOBAL);
 // Shared cache: directory path → FSS source (null = checked, not found)
 const fssSourceCache = new Map<string, string | null>();
 
-export function createPanelResolver(): LayeredResolver {
+export function invalidateFssCache(dirPath: string): void {
+  fssSourceCache.delete(dirPath);
+}
+
+export function createPanelResolver(theme: ThemeKind = 'dark'): LayeredResolver {
   const resolver = new LayeredResolver();
   resolver.addLayer(baseLayer);
-  resolver.setTheme('dark');
+  resolver.setTheme(theme);
   return resolver;
 }
 
@@ -27,11 +31,11 @@ export async function syncLayers(resolver: LayeredResolver, dirPath: string): Pr
     cur = parent;
   }
 
-  // Load uncached .faraday/styles.fs.css files
+  // Load uncached .faraday/fs.css files
   for (const p of ancestors) {
     if (basename(p) === '.faraday') continue;
     if (!fssSourceCache.has(p)) {
-      const fssPath = join(p, '.faraday', 'styles.fs.css');
+      const fssPath = join(p, '.faraday', 'fs.css');
       if (await window.electron.fsa.exists(fssPath)) {
         fssSourceCache.set(p, await window.electron.fsa.readFile(fssPath));
       } else {

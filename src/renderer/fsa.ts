@@ -1,4 +1,4 @@
-import type { FsaRawEntry } from '../types';
+import type { FsaRawEntry, FsChangeEvent, FsChangeType } from '../types';
 import { join } from './path';
 
 export interface HandleMeta {
@@ -14,17 +14,17 @@ const readonlyError = () => {
 
 const CHUNK_SIZE = 65536; // 64 KB
 
-function lazyReadMethods(fsPath: string, offset: number, length: number) {
+function lazyReadMethods(fd: string, offset: number, length: number) {
   return {
     async arrayBuffer(): Promise<ArrayBuffer> {
-      return window.electron.fsa.readSlice(fsPath, offset, length);
+      return window.electron.fsa.read(fd, offset, length);
     },
     async text(): Promise<string> {
-      const buf = await window.electron.fsa.readSlice(fsPath, offset, length);
+      const buf = await window.electron.fsa.read(fd, offset, length);
       return new TextDecoder().decode(buf);
     },
     async bytes(): Promise<Uint8Array<ArrayBuffer>> {
-      const buf = await window.electron.fsa.readSlice(fsPath, offset, length);
+      const buf = await window.electron.fsa.read(fd, offset, length);
       return new Uint8Array(buf);
     },
     stream(): ReadableStream<Uint8Array<ArrayBuffer>> {
@@ -37,7 +37,7 @@ function lazyReadMethods(fsPath: string, offset: number, length: number) {
             return;
           }
           const chunkLen = Math.min(CHUNK_SIZE, remaining);
-          const buf = await window.electron.fsa.readSlice(fsPath, offset + pos, chunkLen);
+          const buf = await window.electron.fsa.read(fd, offset + pos, chunkLen);
           pos += buf.byteLength;
           if (buf.byteLength === 0) {
             controller.close();
@@ -51,55 +51,77 @@ function lazyReadMethods(fsPath: string, offset: number, length: number) {
 }
 
 export class LazyBlob extends Blob {
-  readonly #fsPath: string;
+  readonly #fd: string;
   readonly #offset: number;
   readonly #length: number;
   readonly #type: string;
 
-  constructor(fsPath: string, offset: number, length: number, type = '') {
+  constructor(fd: string, offset: number, length: number, type = '') {
     super([]);
-    this.#fsPath = fsPath;
+    this.#fd = fd;
     this.#offset = offset;
     this.#length = length;
     this.#type = type;
   }
 
-  override get size() { return this.#length; }
-  override get type() { return this.#type; }
+  override get size() {
+    return this.#length;
+  }
+  override get type() {
+    return this.#type;
+  }
 
-  override arrayBuffer() { return lazyReadMethods(this.#fsPath, this.#offset, this.#length).arrayBuffer(); }
-  override text() { return lazyReadMethods(this.#fsPath, this.#offset, this.#length).text(); }
-  override bytes() { return lazyReadMethods(this.#fsPath, this.#offset, this.#length).bytes(); }
-  override stream() { return lazyReadMethods(this.#fsPath, this.#offset, this.#length).stream(); }
+  override arrayBuffer() {
+    return lazyReadMethods(this.#fd, this.#offset, this.#length).arrayBuffer();
+  }
+  override text() {
+    return lazyReadMethods(this.#fd, this.#offset, this.#length).text();
+  }
+  override bytes() {
+    return lazyReadMethods(this.#fd, this.#offset, this.#length).bytes();
+  }
+  override stream() {
+    return lazyReadMethods(this.#fd, this.#offset, this.#length).stream();
+  }
 
   override slice(start = 0, end = this.#length, contentType = ''): LazyBlob {
     const s = Math.max(0, Math.min(start, this.#length));
     const e = Math.max(s, Math.min(end, this.#length));
-    return new LazyBlob(this.#fsPath, this.#offset + s, e - s, contentType);
+    return new LazyBlob(this.#fd, this.#offset + s, e - s, contentType);
   }
 }
 
 export class LazyFile extends File {
-  readonly #fsPath: string;
+  readonly #fd: string;
   readonly #size: number;
 
-  constructor(fsPath: string, size: number, name: string, lastModified: number) {
+  constructor(fd: string, size: number, name: string, lastModified: number) {
     super([], name, { lastModified });
-    this.#fsPath = fsPath;
+    this.#fd = fd;
     this.#size = size;
   }
 
-  override get size() { return this.#size; }
+  override get size() {
+    return this.#size;
+  }
 
-  override arrayBuffer() { return lazyReadMethods(this.#fsPath, 0, this.#size).arrayBuffer(); }
-  override text() { return lazyReadMethods(this.#fsPath, 0, this.#size).text(); }
-  override bytes() { return lazyReadMethods(this.#fsPath, 0, this.#size).bytes(); }
-  override stream() { return lazyReadMethods(this.#fsPath, 0, this.#size).stream(); }
+  override arrayBuffer() {
+    return lazyReadMethods(this.#fd, 0, this.#size).arrayBuffer();
+  }
+  override text() {
+    return lazyReadMethods(this.#fd, 0, this.#size).text();
+  }
+  override bytes() {
+    return lazyReadMethods(this.#fd, 0, this.#size).bytes();
+  }
+  override stream() {
+    return lazyReadMethods(this.#fd, 0, this.#size).stream();
+  }
 
   override slice(start = 0, end = this.#size, contentType = ''): LazyBlob {
     const s = Math.max(0, Math.min(start, this.#size));
     const e = Math.max(s, Math.min(end, this.#size));
-    return new LazyBlob(this.#fsPath, s, e - s, contentType);
+    return new LazyBlob(this.#fd, s, e - s, contentType);
   }
 }
 
@@ -196,10 +218,93 @@ export class FileHandle implements FileSystemFileHandle {
       size = stat.size;
       mtimeMs = stat.mtimeMs;
     }
-    return new LazyFile(this.path, size, this.name, mtimeMs ?? 0);
+    const fd = await window.electron.fsa.open(this.path);
+    return new LazyFile(fd, size, this.name, mtimeMs ?? 0);
   }
 
   async createWritable(): Promise<never> {
     return readonlyError();
+  }
+}
+
+// --- FileSystemObserver ---
+
+export interface FileSystemChangeRecord {
+  root: DirectoryHandle;
+  changedHandle: FileSystemHandle | null;
+  relativePathComponents: string[];
+  type: FsChangeType;
+}
+
+type ObserverCallback = (records: FileSystemChangeRecord[], observer: FileSystemObserver) => void;
+
+let nextWatchId = 0;
+
+export class FileSystemObserver {
+  #callback: ObserverCallback;
+  #watches = new Map<string, DirectoryHandle>(); // watchId → handle
+  #cleanup: (() => void) | null = null;
+
+  constructor(callback: ObserverCallback) {
+    this.#callback = callback;
+  }
+
+  async observe(handle: DirectoryHandle): Promise<void> {
+    // Lazily register IPC listener on first observe
+    if (!this.#cleanup) {
+      this.#cleanup = window.electron.fsa.onFsChange((event: FsChangeEvent) => {
+        this.#handleEvent(event);
+      });
+    }
+
+    const watchId = `fso-${nextWatchId++}`;
+    const result = await window.electron.fsa.watch(watchId, handle.path);
+
+    if (!result.ok) {
+      // Fire errored record immediately
+      this.#callback(
+        [{ root: handle, changedHandle: null, relativePathComponents: [], type: 'errored' }],
+        this,
+      );
+      return;
+    }
+
+    this.#watches.set(watchId, handle);
+  }
+
+  unobserve(handle: DirectoryHandle): void {
+    for (const [watchId, watched] of this.#watches) {
+      if (watched.path === handle.path) {
+        window.electron.fsa.unwatch(watchId);
+        this.#watches.delete(watchId);
+        break;
+      }
+    }
+  }
+
+  disconnect(): void {
+    for (const watchId of this.#watches.keys()) {
+      window.electron.fsa.unwatch(watchId);
+    }
+    this.#watches.clear();
+    if (this.#cleanup) {
+      this.#cleanup();
+      this.#cleanup = null;
+    }
+  }
+
+  #handleEvent(event: FsChangeEvent): void {
+    const root = this.#watches.get(event.watchId);
+    if (!root) return;
+
+    const changedHandle: FileSystemHandle | null = event.name
+      ? new FileHandle(join(root.path, event.name), event.name)
+      : null;
+    const relativePathComponents = event.name ? [event.name] : [];
+
+    this.#callback(
+      [{ root, changedHandle, relativePathComponents, type: event.type }],
+      this,
+    );
   }
 }

@@ -1,11 +1,12 @@
 import { FsNode } from 'fss-lang';
-import type { LayeredResolver } from 'fss-lang';
+import type { LayeredResolver, ThemeKind } from 'fss-lang';
 import { createFsNode } from 'fss-lang/helpers';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { FsChangeType } from '../types';
 import { detectLang } from '../langDetect';
 import { FileList } from './FileList';
-import { DirectoryHandle, type HandleMeta } from './fsa';
-import { createPanelResolver, syncLayers } from './fss';
+import { DirectoryHandle, FileSystemObserver, type FileSystemChangeRecord, type HandleMeta } from './fsa';
+import { createPanelResolver, invalidateFssCache, syncLayers } from './fss';
 import { basename, dirname, join } from './path';
 
 function buildParentChain(dirPath: string): FsNode | undefined {
@@ -57,13 +58,56 @@ interface PanelState {
 
 const emptyPanel: PanelState = { currentPath: '', parentNode: undefined, entries: [], error: null };
 
-function usePanel() {
+async function findExistingParent(startPath: string): Promise<string> {
+  let cur = dirname(startPath);
+  while (cur !== '/') {
+    if (await window.electron.fsa.exists(cur)) return cur;
+    cur = dirname(cur);
+  }
+  return '/';
+}
+
+function getAncestors(dirPath: string): string[] {
+  const ancestors: string[] = [];
+  let cur = dirPath;
+  while (true) {
+    ancestors.push(cur);
+    const parent = dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return ancestors;
+}
+
+function usePanel(theme: ThemeKind) {
   const [state, setState] = useState<PanelState>(emptyPanel);
-  const resolverRef = useRef<LayeredResolver>(createPanelResolver());
+  const resolverRef = useRef<LayeredResolver | null>(null);
+  if (!resolverRef.current) {
+    resolverRef.current = createPanelResolver(theme);
+  }
+
+  const observerRef = useRef<FileSystemObserver | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const currentPathRef = useRef<string>('');
+
+  useEffect(() => {
+    resolverRef.current!.setTheme(theme);
+  }, [theme]);
+
+  const setupWatches = useCallback((dirPath: string) => {
+    const observer = observerRef.current!;
+    observer.disconnect();
+    const ancestors = getAncestors(dirPath);
+    for (const ancestor of ancestors) {
+      observer.observe(new DirectoryHandle(ancestor));
+      observer.observe(new DirectoryHandle(join(ancestor, '.faraday')));
+    }
+  }, []);
 
   const navigateTo = useCallback(async (path: string) => {
     try {
-      await syncLayers(resolverRef.current, path);
+      currentPathRef.current = path;
+      await syncLayers(resolverRef.current!, path);
       const dirHandle = new DirectoryHandle(path);
       const parent = buildParentChain(path);
       const nodes: FsNode[] = [];
@@ -71,20 +115,113 @@ function usePanel() {
         nodes.push(handleToFsNode(handle, path, parent));
       }
       setState({ currentPath: path, parentNode: parent, entries: nodes, error: null });
+      setupWatches(path);
     } catch (err) {
       setState((prev) => ({ ...prev, error: `Failed to read directory: ${err}` }));
     }
+  }, [setupWatches]);
+
+  // Initialize observer once
+  useEffect(() => {
+    const handleRecords = (records: FileSystemChangeRecord[]) => {
+      const curPath = currentPathRef.current;
+      if (!curPath) return;
+
+      let needsRefresh = false;
+      let needsFssRefresh = false;
+      let navigateUp = false;
+
+      for (const record of records) {
+        const rootPath = record.root.path;
+        const changedName = record.relativePathComponents[0] ?? null;
+        const type: FsChangeType = record.type;
+
+        if (rootPath === curPath) {
+          // Current directory changed
+          if (type === 'errored') {
+            navigateUp = true;
+          } else {
+            needsRefresh = true;
+          }
+        } else if (rootPath.endsWith('/.faraday')) {
+          // A .faraday directory changed
+          if (changedName === 'fs.css') {
+            const parentDir = dirname(rootPath);
+            invalidateFssCache(parentDir);
+            needsFssRefresh = true;
+          }
+        } else if (curPath.startsWith(rootPath + '/') || curPath === rootPath) {
+          // Ancestor directory changed
+          if (changedName === '.faraday') {
+            invalidateFssCache(rootPath);
+            needsFssRefresh = true;
+          } else if (changedName) {
+            // Check if the changed entry is the next segment of our path
+            const relative = curPath.slice(rootPath.length + 1);
+            const nextSegment = relative.split('/')[0];
+            if (changedName === nextSegment && type === 'disappeared') {
+              navigateUp = true;
+            }
+          }
+        }
+      }
+
+      if (navigateUp) {
+        // Bypass debounce — navigate immediately
+        if (debounceRef.current) {
+          clearTimeout(debounceRef.current);
+          debounceRef.current = null;
+        }
+        findExistingParent(curPath).then((parent) => {
+          navigateToRef.current(parent);
+        });
+        return;
+      }
+
+      if (needsRefresh || needsFssRefresh) {
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(() => {
+          debounceRef.current = null;
+          navigateToRef.current(currentPathRef.current);
+        }, 100);
+      }
+    };
+
+    observerRef.current = new FileSystemObserver(handleRecords);
+
+    return () => {
+      observerRef.current?.disconnect();
+      observerRef.current = null;
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
+    };
   }, []);
 
-  return { ...state, navigateTo, resolver: resolverRef.current };
+  // Keep a ref to navigateTo so the observer callback always has the latest
+  const navigateToRef = useRef(navigateTo);
+  navigateToRef.current = navigateTo;
+
+  return { ...state, navigateTo, resolver: resolverRef.current! };
 }
 
 type PanelSide = 'left' | 'right';
 
 export function App() {
-  const left = usePanel();
-  const right = usePanel();
+  const [theme, setTheme] = useState<ThemeKind>('dark');
+  const left = usePanel(theme);
+  const right = usePanel(theme);
   const [activePanel, setActivePanel] = useState<PanelSide>('left');
+
+  useEffect(() => {
+    window.electron.theme.get().then((t) => setTheme(t as ThemeKind));
+    return window.electron.theme.onChange((t) => setTheme(t as ThemeKind));
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
 
   useEffect(() => {
     window.electron.utils.getHomePath().then((home) => {
@@ -114,11 +251,25 @@ export function App() {
       <div className="panels">
         <div className={`panel ${activePanel === 'left' ? 'active' : ''}`} onClick={() => setActivePanel('left')}>
           {left.error && <div className="error">{left.error}</div>}
-          <FileList currentPath={left.currentPath} parentNode={left.parentNode} entries={left.entries} onNavigate={left.navigateTo} active={activePanel === 'left'} resolver={left.resolver} />
+          <FileList
+            currentPath={left.currentPath}
+            parentNode={left.parentNode}
+            entries={left.entries}
+            onNavigate={left.navigateTo}
+            active={activePanel === 'left'}
+            resolver={left.resolver}
+          />
         </div>
         <div className={`panel ${activePanel === 'right' ? 'active' : ''}`} onClick={() => setActivePanel('right')}>
           {right.error && <div className="error">{right.error}</div>}
-          <FileList currentPath={right.currentPath} parentNode={right.parentNode} entries={right.entries} onNavigate={right.navigateTo} active={activePanel === 'right'} resolver={right.resolver} />
+          <FileList
+            currentPath={right.currentPath}
+            parentNode={right.parentNode}
+            entries={right.entries}
+            onNavigate={right.navigateTo}
+            active={activePanel === 'right'}
+            resolver={right.resolver}
+          />
         </div>
       </div>
     </div>
