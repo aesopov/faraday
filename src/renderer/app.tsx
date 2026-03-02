@@ -4,6 +4,7 @@ import { createFsNode } from 'fss-lang/helpers';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FsChangeType } from '../types';
 import { detectLang } from '../langDetect';
+import { actionQueue } from './actionQueue';
 import { FileList } from './FileList';
 import { FileViewer } from './FileViewer';
 import { DirectoryHandle, FileSystemObserver, type FileSystemChangeRecord, type HandleMeta } from './fsa';
@@ -241,7 +242,7 @@ export function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Tab') {
         e.preventDefault();
-        setActivePanel((s) => (s === 'left' ? 'right' : 'left'));
+        actionQueue.enqueue(() => setActivePanel((s) => (s === 'left' ? 'right' : 'left')));
       }
     };
     window.addEventListener('keydown', handleKeyDown);

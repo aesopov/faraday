@@ -41,6 +41,7 @@
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.19",
+    "@vscode/sudo-prompt": "^9.3.2",
     "electron-squirrel-startup": "^1.0.1",
     "fss-lang": "^0.0.5",
     "memfs": "^4.56.10",

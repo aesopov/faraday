@@ -1,180 +1,169 @@
 import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron';
 import started from 'electron-squirrel-startup';
-import { watch, type FSWatcher } from 'node:fs';
-import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { FsOps } from './fsOps';
+import { FsProxy } from './fsProxy';
+import { launchElevated, type ElevatedChild } from './elevate';
+import type { FsaRawEntry, FsChangeEvent } from './types';
+
+// --fs mode: run as elevated FS service, skip everything else
+if (process.argv.includes('--fs')) {
+  if (process.platform === 'darwin') app.dock.hide();
+  import('./fsService').then(({ startFsService }) => startFsService());
+} else {
 
 if (started) {
   app.quit();
 }
 
-// IPC handlers — FSA-compatible
-ipcMain.handle('fsa:entries', async (_event, dirPath: string) => {
-  const dirents = await fs.readdir(dirPath, { withFileTypes: true });
-  return Promise.all(
-    dirents.map(async (d) => {
-      const fullPath = path.join(dirPath, d.name);
-      let size = 0;
-      let mtimeMs = 0;
-      let mode = 0;
-      let isSymbolicLink = false;
-      try {
-        const s = await fs.stat(fullPath);
-        size = s.size;
-        mtimeMs = s.mtimeMs;
-        mode = s.mode;
-      } catch {
-        // Skip stat errors (e.g. permission denied)
+// Per-webContents FsOps instances
+const opsByContents = new Map<number, FsOps>();
+
+function getOps(contentsId: number, sender: Electron.WebContents): FsOps {
+  let ops = opsByContents.get(contentsId);
+  if (!ops) {
+    ops = new FsOps((event) => {
+      if (!sender.isDestroyed()) {
+        sender.send('fsa:change', event);
       }
-      isSymbolicLink = d.isSymbolicLink();
-      return {
-        name: d.name,
-        kind: d.isDirectory() ? 'directory' : 'file',
-        size,
-        mtimeMs,
-        mode,
-        isSymbolicLink,
-      };
-    }),
-  );
-});
-
-ipcMain.handle('fsa:readFile', async (_event, filePath: string) => {
-  return fs.readFile(filePath, 'utf-8');
-});
-
-ipcMain.handle('fsa:stat', async (_event, filePath: string) => {
-  const s = await fs.stat(filePath);
-  return { size: s.size, mtimeMs: s.mtimeMs };
-});
-
-ipcMain.handle('fsa:exists', async (_event, filePath: string) => {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
+    });
+    opsByContents.set(contentsId, ops);
   }
-});
-
-// Open file descriptors — keyed by webContents id, then fdId
-type NodeFileHandle = Awaited<ReturnType<typeof fs.open>>;
-const openFdsByContents = new Map<number, Map<string, NodeFileHandle>>();
-let nextFdId = 0;
-
-function getOpenFdMap(contentsId: number): Map<string, NodeFileHandle> {
-  let map = openFdsByContents.get(contentsId);
-  if (!map) {
-    map = new Map();
-    openFdsByContents.set(contentsId, map);
-  }
-  return map;
+  return ops;
 }
 
-function closeAllFdsForContents(contentsId: number): void {
-  const map = openFdsByContents.get(contentsId);
-  if (!map) return;
-  for (const fd of map.values()) fd.close().catch(() => {});
-  map.clear();
-  openFdsByContents.delete(contentsId);
+function cleanupContents(contentsId: number): void {
+  const ops = opsByContents.get(contentsId);
+  if (ops) {
+    ops.closeAll();
+    opsByContents.delete(contentsId);
+  }
 }
 
-ipcMain.handle('fsa:open', async (event, filePath: string) => {
-  const fd = await fs.open(filePath, 'r');
-  const fdId = `fd-${nextFdId++}`;
-  getOpenFdMap(event.sender.id).set(fdId, fd);
-  return fdId;
-});
+// Elevated FS proxy — singleton, lazily launched
+let proxy: FsProxy | null = null;
+let proxyLaunching: Promise<FsProxy> | null = null;
+let proxyChild: ElevatedChild | null = null;
+
+function broadcastWatchEvent(event: FsChangeEvent): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.webContents.isDestroyed()) {
+      win.webContents.send('fsa:change', event);
+    }
+  }
+}
+
+async function getProxy(): Promise<FsProxy> {
+  if (proxy?.isAlive) return proxy;
+
+  if (proxyLaunching) return proxyLaunching;
+
+  proxyLaunching = (async () => {
+    try {
+      const child = await launchElevated();
+      proxyChild = child;
+      proxy = new FsProxy(child.socket, broadcastWatchEvent);
+
+      // Clean up when child disconnects
+      child.done.then(() => {
+        proxy = null;
+        proxyChild = null;
+      });
+
+      return proxy;
+    } finally {
+      proxyLaunching = null;
+    }
+  })();
+
+  return proxyLaunching;
+}
+
+function isElevatable(err: unknown): boolean {
+  // Only escalate EACCES (traditional Unix permission denied).
+  // EPERM means a MAC policy (macOS TCC/SIP, Linux SELinux/AppArmor)
+  // that even root cannot bypass — prompting for a password won't help.
+  const code = (err as NodeJS.ErrnoException)?.code;
+  return code === 'EACCES';
+}
+
+// Escalation wrapper: try local first, on EACCES/EPERM retry via elevated proxy
+function withEscalation<A extends unknown[], R>(
+  localFn: (ops: FsOps, ...args: A) => Promise<R>,
+  proxyFn: (proxy: FsProxy, ...args: A) => Promise<R>,
+) {
+  return async (event: Electron.IpcMainInvokeEvent, ...args: A): Promise<R> => {
+    const ops = getOps(event.sender.id, event.sender);
+    try {
+      return await localFn(ops, ...args);
+    } catch (err) {
+      if (!isElevatable(err)) throw err;
+      const p = await getProxy();
+      return proxyFn(p, ...args);
+    }
+  };
+}
+
+// IPC handlers — FSA-compatible, with automatic escalation
+ipcMain.handle('fsa:entries', withEscalation(
+  (ops, dirPath: string) => ops.entries(dirPath),
+  (p, dirPath: string) => p.entries(dirPath) as Promise<FsaRawEntry[]>,
+));
+
+ipcMain.handle('fsa:readFile', withEscalation(
+  (ops, filePath: string) => ops.readFile(filePath),
+  (p, filePath: string) => p.readFile(filePath) as Promise<string>,
+));
+
+ipcMain.handle('fsa:stat', withEscalation(
+  (ops, filePath: string) => ops.stat(filePath),
+  (p, filePath: string) => p.stat(filePath) as Promise<{ size: number; mtimeMs: number }>,
+));
+
+ipcMain.handle('fsa:exists', withEscalation(
+  (ops, filePath: string) => ops.exists(filePath),
+  (p, filePath: string) => p.exists(filePath) as Promise<boolean>,
+));
+
+ipcMain.handle('fsa:open', withEscalation(
+  (ops, filePath: string) => ops.open(filePath),
+  (p, filePath: string) => p.open(filePath),
+));
 
 ipcMain.handle('fsa:read', async (event, fdId: string, offset: number, length: number) => {
-  const fd = openFdsByContents.get(event.sender.id)?.get(fdId);
-  if (!fd) throw new Error('Invalid file descriptor');
-  const buffer = Buffer.alloc(length);
-  const { bytesRead } = await fd.read(buffer, 0, length, offset);
-  return buffer.buffer.slice(0, bytesRead);
+  if (fdId.startsWith('proxy:')) {
+    const p = proxy;
+    if (!p?.isAlive) throw new Error('Elevated FS service is not connected');
+    const buf = await p.read(fdId, offset, length);
+    return buf instanceof Buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf;
+  }
+  const ops = getOps(event.sender.id, event.sender);
+  const buf = await ops.read(fdId, offset, length);
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
 });
 
 ipcMain.handle('fsa:close', async (event, fdId: string) => {
-  const map = openFdsByContents.get(event.sender.id);
-  if (!map) return;
-  const fd = map.get(fdId);
-  if (fd) {
-    map.delete(fdId);
-    await fd.close();
+  if (fdId.startsWith('proxy:')) {
+    const p = proxy;
+    if (!p?.isAlive) return;
+    return p.close(fdId);
   }
+  const ops = getOps(event.sender.id, event.sender);
+  return ops.close(fdId);
 });
 
-// File system watchers — keyed by webContents id, then watchId
-const watchersByContents = new Map<number, Map<string, FSWatcher>>();
-
-function getWatcherMap(contentsId: number): Map<string, FSWatcher> {
-  let map = watchersByContents.get(contentsId);
-  if (!map) {
-    map = new Map();
-    watchersByContents.set(contentsId, map);
-  }
-  return map;
-}
-
-function closeAllWatchersForContents(contentsId: number): void {
-  const map = watchersByContents.get(contentsId);
-  if (!map) return;
-  for (const watcher of map.values()) watcher.close();
-  map.clear();
-  watchersByContents.delete(contentsId);
-}
-
-ipcMain.handle('fsa:watch', async (event, watchId: string, dirPath: string) => {
-  try {
-    await fs.access(dirPath);
-  } catch {
-    return { ok: false };
-  }
-
-  const contentsId = event.sender.id;
-  const map = getWatcherMap(contentsId);
-
-  // Close existing watcher with same ID
-  map.get(watchId)?.close();
-
-  const watcher = watch(dirPath, async (eventType, filename) => {
-    if (event.sender.isDestroyed()) return;
-    let type: string;
-    if (eventType === 'rename') {
-      try {
-        await fs.access(path.join(dirPath, filename ?? ''));
-        type = 'appeared';
-      } catch {
-        type = 'disappeared';
-      }
-    } else if (eventType === 'change') {
-      type = 'modified';
-    } else {
-      type = 'unknown';
-    }
-    event.sender.send('fsa:change', { watchId, type, name: filename ?? null });
-  });
-
-  watcher.on('error', () => {
-    if (!event.sender.isDestroyed()) {
-      event.sender.send('fsa:change', { watchId, type: 'errored', name: null });
-    }
-    watcher.close();
-    map.delete(watchId);
-  });
-
-  map.set(watchId, watcher);
-  return { ok: true };
-});
+ipcMain.handle('fsa:watch', withEscalation(
+  (ops, watchId: string, dirPath: string) => ops.watch(watchId, dirPath),
+  (p, watchId: string, dirPath: string) => p.watch(watchId, dirPath) as Promise<{ ok: boolean }>,
+));
 
 ipcMain.handle('fsa:unwatch', async (event, watchId: string) => {
-  const map = watchersByContents.get(event.sender.id);
-  if (!map) return;
-  const watcher = map.get(watchId);
-  if (watcher) {
-    watcher.close();
-    map.delete(watchId);
+  const ops = getOps(event.sender.id, event.sender);
+  await ops.unwatch(watchId);
+  // Also unwatch from proxy in case it was escalated
+  if (proxy?.isAlive) {
+    await proxy.unwatch(watchId).catch(() => {});
   }
 });
 
@@ -201,12 +190,10 @@ const createWindow = () => {
 
   // Clean up watchers and open fds on reload or window close
   mainWindow.webContents.on('did-start-navigation', () => {
-    closeAllWatchersForContents(contentsId);
-    closeAllFdsForContents(contentsId);
+    cleanupContents(contentsId);
   });
   mainWindow.webContents.on('destroyed', () => {
-    closeAllWatchersForContents(contentsId);
-    closeAllFdsForContents(contentsId);
+    cleanupContents(contentsId);
   });
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
@@ -225,8 +212,8 @@ app.on('window-all-closed', () => {
 });
 
 app.on('will-quit', () => {
-  for (const contentsId of watchersByContents.keys()) closeAllWatchersForContents(contentsId);
-  for (const contentsId of openFdsByContents.keys()) closeAllFdsForContents(contentsId);
+  for (const contentsId of opsByContents.keys()) cleanupContents(contentsId);
+  proxyChild?.kill();
 });
 
 app.on('activate', () => {
@@ -234,3 +221,5 @@ app.on('activate', () => {
     createWindow();
   }
 });
+
+} // end of normal mode block

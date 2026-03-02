@@ -2,6 +2,7 @@ import { FsNode } from 'fss-lang';
 import type { LayeredResolver } from 'fss-lang';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { actionQueue } from './actionQueue';
 import { resolveEntryStyle } from './fss';
 import { loadIcons, getCachedIconUrl } from './iconCache';
 import { dirname, join } from './path';
@@ -12,7 +13,7 @@ interface FileListProps {
   currentPath: string;
   parentNode?: FsNode;
   entries: FsNode[];
-  onNavigate: (path: string) => void;
+  onNavigate: (path: string) => Promise<void>;
   onViewFile?: (filePath: string, fileName: string, fileSize: number) => void;
   active: boolean;
   resolver: LayeredResolver;
@@ -46,6 +47,17 @@ export function FileList({ currentPath, parentNode, entries, onNavigate, onViewF
   const [, setIconsVersion] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevPathRef = useRef(currentPath);
+
+  // Refs for values read at action-execution time (not enqueue time)
+  const displayEntriesRef = useRef<{ entry: FsNode; style: { color?: string; opacity?: number; icon: string | null } }[]>([]);
+  const selectedIndexRef = useRef(selectedIndex);
+  selectedIndexRef.current = selectedIndex;
+  const currentPathRef = useRef(currentPath);
+  currentPathRef.current = currentPath;
+  const onNavigateRef = useRef(onNavigate);
+  onNavigateRef.current = onNavigate;
+  const onViewFileRef = useRef(onViewFile);
+  onViewFileRef.current = onViewFile;
 
   // Resolve styles and sort using FSS
   const sorted = useMemo(() => {
@@ -86,6 +98,8 @@ export function FileList({ currentPath, parentNode, entries, onNavigate, onViewF
     }
     return result;
   }, [sorted, parentNode]);
+
+  displayEntriesRef.current = displayEntries;
 
   // Load icons for visible entries
   const neededIcons = useMemo(() => {
@@ -144,19 +158,18 @@ export function FileList({ currentPath, parentNode, entries, onNavigate, onViewF
     virtualizer.scrollToIndex(selectedIndex, { align: 'auto' });
   }, [selectedIndex, virtualizer]);
 
-  const isRoot = currentPath === '/';
 
   const navigateToEntry = useCallback(
-    (entry: FsNode) => {
+    async (entry: FsNode): Promise<void> => {
       if (entry.name === '..') {
-        onNavigate(dirname(currentPath));
+        await onNavigateRef.current(dirname(currentPathRef.current));
       } else if (entry.type === 'folder') {
-        onNavigate(join(currentPath, entry.name));
-      } else if (entry.type === 'file' && onViewFile) {
-        onViewFile(entry.path as string, entry.name, Number(entry.meta.size));
+        await onNavigateRef.current(join(currentPathRef.current, entry.name));
+      } else if (entry.type === 'file' && onViewFileRef.current) {
+        onViewFileRef.current(entry.path as string, entry.name, Number(entry.meta.size));
       }
     },
-    [currentPath, onNavigate, onViewFile],
+    [],
   );
 
   // Keyboard navigation (only when active)
@@ -167,46 +180,51 @@ export function FileList({ currentPath, parentNode, entries, onNavigate, onViewF
       switch (e.key) {
         case 'ArrowUp':
           e.preventDefault();
-          setSelectedIndex((i) => Math.max(0, i - 1));
+          actionQueue.enqueue(() => setSelectedIndex((i) => Math.max(0, i - 1)));
           break;
         case 'ArrowDown':
           e.preventDefault();
-          setSelectedIndex((i) => Math.min(displayEntries.length - 1, i + 1));
+          actionQueue.enqueue(() => setSelectedIndex((i) => Math.min(displayEntriesRef.current.length - 1, i + 1)));
           break;
         case 'Home':
           e.preventDefault();
-          setSelectedIndex(0);
+          actionQueue.enqueue(() => setSelectedIndex(0));
           break;
         case 'End':
           e.preventDefault();
-          setSelectedIndex(displayEntries.length - 1);
+          actionQueue.enqueue(() => setSelectedIndex(displayEntriesRef.current.length - 1));
           break;
         case 'PageUp':
           e.preventDefault();
-          setSelectedIndex((i) => Math.max(0, i - 20));
+          actionQueue.enqueue(() => setSelectedIndex((i) => Math.max(0, i - 20)));
           break;
         case 'PageDown':
           e.preventDefault();
-          setSelectedIndex((i) => Math.min(displayEntries.length - 1, i + 20));
+          actionQueue.enqueue(() => setSelectedIndex((i) => Math.min(displayEntriesRef.current.length - 1, i + 20)));
           break;
-        case 'Enter': {
+        case 'Enter':
           e.preventDefault();
-          const item = displayEntries[selectedIndex];
-          if (item) navigateToEntry(item.entry);
+          actionQueue.enqueue(async () => {
+            const item = displayEntriesRef.current[selectedIndexRef.current];
+            if (item) await navigateToEntry(item.entry);
+          });
           break;
-        }
         case 'Backspace':
           e.preventDefault();
-          if (!isRoot) {
-            onNavigate(dirname(currentPath));
-          }
+          actionQueue.enqueue(async () => {
+            if (currentPathRef.current !== '/') {
+              await onNavigateRef.current(dirname(currentPathRef.current));
+            }
+          });
           break;
         case 'F3': {
           e.preventDefault();
-          const item = displayEntries[selectedIndex];
-          if (item && item.entry.type === 'file' && onViewFile) {
-            onViewFile(item.entry.path as string, item.entry.name, Number(item.entry.meta.size));
-          }
+          actionQueue.enqueue(() => {
+            const item = displayEntriesRef.current[selectedIndexRef.current];
+            if (item && item.entry.type === 'file' && onViewFileRef.current) {
+              onViewFileRef.current(item.entry.path as string, item.entry.name, Number(item.entry.meta.size));
+            }
+          });
           break;
         }
       }
@@ -214,7 +232,7 @@ export function FileList({ currentPath, parentNode, entries, onNavigate, onViewF
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, currentPath, displayEntries, selectedIndex, isRoot, onNavigate, onViewFile, navigateToEntry]);
+  }, [active, navigateToEntry]);
 
   return (
     <div className="file-list">
@@ -243,8 +261,8 @@ export function FileList({ currentPath, parentNode, entries, onNavigate, onViewF
                   transform: `translateY(${virtualRow.start}px)`,
                   opacity: style.opacity,
                 }}
-                onClick={() => setSelectedIndex(virtualRow.index)}
-                onDoubleClick={() => navigateToEntry(entry)}
+                onClick={() => actionQueue.enqueue(() => setSelectedIndex(virtualRow.index))}
+                onDoubleClick={() => actionQueue.enqueue(() => navigateToEntry(entry))}
               >
                 <span className="entry-icon">
                   <img src={getIconUrl(style.icon, entry.type === 'folder')} width={16} height={16} alt="" />
