@@ -10,7 +10,9 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
-    "lint": "eslint --ext .ts,.tsx ."
+    "lint": "eslint --ext .ts,.tsx .",
+    "build:helper": "cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release && cmake --build native/build",
+    "build:helper-zig": "cd native-zig && zig build -Doptimize=ReleaseSmall"
   },
   "keywords": [],
   "author": {
@@ -41,7 +43,6 @@
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.19",
-    "@vscode/sudo-prompt": "^9.3.2",
     "electron-squirrel-startup": "^1.0.1",
     "fss-lang": "^0.0.5",
     "memfs": "^4.56.10",

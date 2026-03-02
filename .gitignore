@@ -92,3 +92,8 @@ typings/
 
 # Electron-Forge
 out/
+
+# Native helper build artifacts
+native/build/
+native-zig/zig-out/
+native-zig/.zig-cache/

@@ -1,25 +1,26 @@
 import type net from 'node:net';
-import type { FsChangeEvent, FsIpcRequest, FsIpcResponse, FsIpcError, FsIpcEvent } from './types';
+import type { FsChangeEvent, FsChangeType } from './types';
+import {
+  MSG_RESPONSE, MSG_ERROR, MSG_EVENT, MSG_REQUEST,
+  METHOD_ENTRIES, METHOD_STAT, METHOD_EXISTS, METHOD_READFILE,
+  METHOD_OPEN, METHOD_READ, METHOD_CLOSE, METHOD_WATCH, METHOD_UNWATCH,
+  EVT_TYPES, BufReader, BufWriter,
+} from './protocol';
 
-type Pending = { resolve: (v: unknown) => void; reject: (e: Error) => void };
+type Pending = { resolve: (payload: Buffer) => void; reject: (e: Error) => void };
 
 export class FsProxy {
   private nextId = 0;
   private pending = new Map<number, Pending>();
-  private buf = '';
+  private buf = Buffer.alloc(0);
 
   constructor(
     private socket: net.Socket,
     private onWatchEvent: (event: FsChangeEvent) => void,
   ) {
     socket.on('data', (chunk: Buffer) => {
-      this.buf += chunk.toString();
-      let nl: number;
-      while ((nl = this.buf.indexOf('\n')) !== -1) {
-        const line = this.buf.slice(0, nl);
-        this.buf = this.buf.slice(nl + 1);
-        this.handleMessage(line);
-      }
+      this.buf = Buffer.concat([this.buf, chunk]);
+      this.processMessages();
     });
 
     socket.on('close', () => {
@@ -34,40 +35,54 @@ export class FsProxy {
     return !this.socket.destroyed;
   }
 
-  private handleMessage(line: string): void {
-    let msg: FsIpcResponse | FsIpcError | FsIpcEvent;
-    try {
-      msg = JSON.parse(line);
-    } catch {
-      return;
-    }
-
-    // Watcher event (no id)
-    if ('event' in msg) {
-      this.onWatchEvent((msg as FsIpcEvent).data);
-      return;
-    }
-
-    const id = (msg as FsIpcResponse | FsIpcError).id;
-    const p = this.pending.get(id);
-    if (!p) return;
-    this.pending.delete(id);
-
-    if ('error' in msg) {
-      const err = new Error((msg as FsIpcError).error.message);
-      (err as NodeJS.ErrnoException).code = (msg as FsIpcError).error.code;
-      p.reject(err);
-    } else {
-      let result = (msg as FsIpcResponse).result;
-      // Decode base64 binary responses back to Buffer
-      if ((msg as FsIpcResponse).binary && typeof result === 'string') {
-        result = Buffer.from(result, 'base64');
-      }
-      p.resolve(result);
+  private processMessages(): void {
+    while (this.buf.length >= 4) {
+      const msgLen = this.buf.readUInt32LE(0);
+      if (this.buf.length < 4 + msgLen) break;
+      const msg = this.buf.subarray(4, 4 + msgLen);
+      this.buf = this.buf.subarray(4 + msgLen);
+      this.handleMessage(msg);
     }
   }
 
-  private send(method: string, args: unknown[]): Promise<unknown> {
+  private handleMessage(msg: Buffer): void {
+    const type = msg[0];
+    const payload = msg.subarray(1);
+
+    if (type === MSG_EVENT) {
+      const r = new BufReader(payload);
+      const watchId = r.str();
+      const typeCode = r.u8();
+      const hasName = r.u8();
+      const name = hasName ? r.str() : null;
+      this.onWatchEvent({ watchId, type: (EVT_TYPES[typeCode] ?? 'unknown') as FsChangeType, name });
+      return;
+    }
+
+    if (type === MSG_RESPONSE) {
+      const id = payload.readUInt32LE(0);
+      const p = this.pending.get(id);
+      if (!p) return;
+      this.pending.delete(id);
+      p.resolve(payload.subarray(4));
+      return;
+    }
+
+    if (type === MSG_ERROR) {
+      const id = payload.readUInt32LE(0);
+      const p = this.pending.get(id);
+      if (!p) return;
+      this.pending.delete(id);
+      const r = new BufReader(payload.subarray(4));
+      const code = r.str();
+      const message = r.str();
+      const err = new Error(message);
+      (err as NodeJS.ErrnoException).code = code;
+      p.reject(err);
+    }
+  }
+
+  private send(method: number, args: Buffer): Promise<Buffer> {
     return new Promise((resolve, reject) => {
       if (this.socket.destroyed) {
         reject(new Error('Elevated FS service is not connected'));
@@ -75,48 +90,83 @@ export class FsProxy {
       }
       const id = this.nextId++;
       this.pending.set(id, { resolve, reject });
-      const req: FsIpcRequest = { id, method, args };
-      this.socket.write(JSON.stringify(req) + '\n');
+
+      // Message payload: [MSG_REQUEST][id:4][method:1][args...]
+      const header = Buffer.alloc(1 + 4 + 1);
+      header[0] = MSG_REQUEST;
+      header.writeUInt32LE(id, 1);
+      header[5] = method;
+      const body = Buffer.concat([header, args]);
+
+      // Wire: [len:4][body...]
+      const lenBuf = Buffer.alloc(4);
+      lenBuf.writeUInt32LE(body.length);
+      this.socket.write(Buffer.concat([lenBuf, body]));
     });
   }
 
   async entries(dirPath: string): Promise<unknown> {
-    return this.send('entries', [dirPath]);
+    const payload = await this.send(METHOD_ENTRIES, new BufWriter().str(dirPath).build());
+    const r = new BufReader(payload);
+    const count = r.u32();
+    const entries = [];
+    for (let i = 0; i < count; i++) {
+      entries.push({
+        name: r.str(),
+        kind: r.u8() === 1 ? 'directory' : 'file',
+        size: r.f64(),
+        mtimeMs: r.f64(),
+        mode: r.u32(),
+        isSymbolicLink: r.u8() !== 0,
+      });
+    }
+    return entries;
   }
 
   async readFile(filePath: string): Promise<unknown> {
-    return this.send('readFile', [filePath]);
+    const payload = await this.send(METHOD_READFILE, new BufWriter().str(filePath).build());
+    const r = new BufReader(payload);
+    return r.bytes().toString('utf-8');
   }
 
   async stat(filePath: string): Promise<unknown> {
-    return this.send('stat', [filePath]);
+    const payload = await this.send(METHOD_STAT, new BufWriter().str(filePath).build());
+    const r = new BufReader(payload);
+    return { size: r.f64(), mtimeMs: r.f64() };
   }
 
   async exists(filePath: string): Promise<unknown> {
-    return this.send('exists', [filePath]);
+    const payload = await this.send(METHOD_EXISTS, new BufWriter().str(filePath).build());
+    const r = new BufReader(payload);
+    return r.u8() !== 0;
   }
 
   async open(filePath: string): Promise<string> {
-    const fdId = await this.send('open', [filePath]) as string;
-    return `proxy:${fdId}`;
+    const payload = await this.send(METHOD_OPEN, new BufWriter().str(filePath).build());
+    const r = new BufReader(payload);
+    return `proxy:${r.str()}`;
   }
 
   async read(fdId: string, offset: number, length: number): Promise<Buffer> {
     const remoteFdId = fdId.replace(/^proxy:/, '');
-    return this.send('read', [remoteFdId, offset, length]) as Promise<Buffer>;
+    const payload = await this.send(METHOD_READ, new BufWriter().str(remoteFdId).f64(offset).f64(length).build());
+    const r = new BufReader(payload);
+    return r.bytes();
   }
 
   async close(fdId: string): Promise<void> {
     const remoteFdId = fdId.replace(/^proxy:/, '');
-    await this.send('close', [remoteFdId]);
+    await this.send(METHOD_CLOSE, new BufWriter().str(remoteFdId).build());
   }
 
   async watch(watchId: string, dirPath: string): Promise<unknown> {
-    return this.send('watch', [watchId, dirPath]);
+    const payload = await this.send(METHOD_WATCH, new BufWriter().str(watchId).str(dirPath).build());
+    const r = new BufReader(payload);
+    return { ok: r.u8() !== 0 };
   }
 
   async unwatch(watchId: string): Promise<void> {
-    await this.send('unwatch', [watchId]);
+    await this.send(METHOD_UNWATCH, new BufWriter().str(watchId).build());
   }
 
   destroy(): void {

@@ -11,9 +11,6 @@ importers:
       '@tanstack/react-virtual':
         specifier: ^3.13.19
         version: 3.13.19(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
-      '@vscode/sudo-prompt':
-        specifier: ^9.3.2
-        version: 9.3.2
       electron-squirrel-startup:
         specifier: ^1.0.1
         version: 1.0.1

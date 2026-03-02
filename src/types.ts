@@ -47,10 +47,7 @@ export interface ElectronBridge {
 }
 
 // IPC protocol types for privileged FS service
-export interface FsIpcRequest  { id: number; method: string; args: unknown[] }
-export interface FsIpcResponse { id: number; result: unknown; binary?: true }
-export interface FsIpcError    { id: number; error: { code: string; message: string } }
-export interface FsIpcEvent    { event: 'change'; data: FsChangeEvent }
+
 export interface FsIpcAuth     { auth: string }
 
 declare global {

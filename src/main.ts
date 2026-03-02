@@ -7,12 +7,6 @@ import { FsProxy } from './fsProxy';
 import { launchElevated, type ElevatedChild } from './elevate';
 import type { FsaRawEntry, FsChangeEvent } from './types';
 
-// --fs mode: run as elevated FS service, skip everything else
-if (process.argv.includes('--fs')) {
-  if (process.platform === 'darwin') app.dock.hide();
-  import('./fsService').then(({ startFsService }) => startFsService());
-} else {
-
 if (started) {
   app.quit();
 }
@@ -221,5 +215,3 @@ app.on('activate', () => {
     createWindow();
   }
 });
-
-} // end of normal mode block
