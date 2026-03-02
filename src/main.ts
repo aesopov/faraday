@@ -82,11 +82,15 @@ function isElevatable(err: unknown): boolean {
   return code === 'EACCES';
 }
 
+function withErrorHandling<A extends unknown[], T>(fn: (...args: A) => Promise<T>): (...args: A) => Promise<{ result?: T; error?: Error }> {
+  return (...args: A) =>
+    fn(...args)
+      .then((result) => ({ result }))
+      .catch((err) => ({ error: err }));
+}
+
 // Escalation wrapper: try local first, on EACCES/EPERM retry via elevated proxy
-function withEscalation<A extends unknown[], R>(
-  localFn: (ops: FsOps, ...args: A) => Promise<R>,
-  proxyFn: (proxy: FsProxy, ...args: A) => Promise<R>,
-) {
+function withEscalation<A extends unknown[], R>(localFn: (ops: FsOps, ...args: A) => Promise<R>, proxyFn: (proxy: FsProxy, ...args: A) => Promise<R>) {
   return async (event: Electron.IpcMainInvokeEvent, ...args: A): Promise<R> => {
     const ops = getOps(event.sender.id, event.sender);
     try {
@@ -100,66 +104,105 @@ function withEscalation<A extends unknown[], R>(
 }
 
 // IPC handlers — FSA-compatible, with automatic escalation
-ipcMain.handle('fsa:entries', withEscalation(
-  (ops, dirPath: string) => ops.entries(dirPath),
-  (p, dirPath: string) => p.entries(dirPath) as Promise<FsaRawEntry[]>,
-));
+ipcMain.handle(
+  'fsa:entries',
+  withErrorHandling(
+    withEscalation(
+      (ops, dirPath: string) => ops.entries(dirPath),
+      (p, dirPath: string) => {
+        return p.entries(dirPath) as Promise<FsaRawEntry[]>;
+      },
+    ),
+  ),
+);
 
-ipcMain.handle('fsa:readFile', withEscalation(
-  (ops, filePath: string) => ops.readFile(filePath),
-  (p, filePath: string) => p.readFile(filePath) as Promise<string>,
-));
+ipcMain.handle(
+  'fsa:readFile',
+  withEscalation(
+    (ops, filePath: string) => ops.readFile(filePath),
+    (p, filePath: string) => p.readFile(filePath) as Promise<string>,
+  ),
+);
 
-ipcMain.handle('fsa:stat', withEscalation(
-  (ops, filePath: string) => ops.stat(filePath),
-  (p, filePath: string) => p.stat(filePath) as Promise<{ size: number; mtimeMs: number }>,
-));
+ipcMain.handle(
+  'fsa:stat',
+  withErrorHandling(
+    withEscalation(
+      (ops, filePath: string) => ops.stat(filePath),
+      (p, filePath: string) => p.stat(filePath) as Promise<{ size: number; mtimeMs: number }>,
+    ),
+  ),
+);
 
-ipcMain.handle('fsa:exists', withEscalation(
-  (ops, filePath: string) => ops.exists(filePath),
-  (p, filePath: string) => p.exists(filePath) as Promise<boolean>,
-));
+ipcMain.handle(
+  'fsa:exists',
+  withErrorHandling(
+    withEscalation(
+      (ops, filePath: string) => ops.exists(filePath),
+      (p, filePath: string) => p.exists(filePath) as Promise<boolean>,
+    ),
+  ),
+);
 
-ipcMain.handle('fsa:open', withEscalation(
-  (ops, filePath: string) => ops.open(filePath),
-  (p, filePath: string) => p.open(filePath),
-));
+ipcMain.handle(
+  'fsa:open',
+  withErrorHandling(
+    withEscalation(
+      (ops, filePath: string) => ops.open(filePath),
+      (p, filePath: string) => p.open(filePath),
+    ),
+  ),
+);
 
-ipcMain.handle('fsa:read', async (event, fdId: string, offset: number, length: number) => {
-  if (fdId.startsWith('proxy:')) {
-    const p = proxy;
-    if (!p?.isAlive) throw new Error('Elevated FS service is not connected');
-    const buf = await p.read(fdId, offset, length);
-    return buf instanceof Buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf;
-  }
-  const ops = getOps(event.sender.id, event.sender);
-  const buf = await ops.read(fdId, offset, length);
-  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
-});
+ipcMain.handle(
+  'fsa:read',
+  withErrorHandling(async (event, fdId: string, offset: number, length: number) => {
+    if (fdId.startsWith('proxy:')) {
+      const p = proxy;
+      if (!p?.isAlive) throw new Error('Elevated FS service is not connected');
+      const buf = await p.read(fdId, offset, length);
+      return buf instanceof Buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf;
+    }
+    const ops = getOps(event.sender.id, event.sender);
+    const buf = await ops.read(fdId, offset, length);
+    return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  }),
+);
 
-ipcMain.handle('fsa:close', async (event, fdId: string) => {
-  if (fdId.startsWith('proxy:')) {
-    const p = proxy;
-    if (!p?.isAlive) return;
-    return p.close(fdId);
-  }
-  const ops = getOps(event.sender.id, event.sender);
-  return ops.close(fdId);
-});
+ipcMain.handle(
+  'fsa:close',
+  withErrorHandling(async (event, fdId: string) => {
+    if (fdId.startsWith('proxy:')) {
+      const p = proxy;
+      if (!p?.isAlive) return;
+      return p.close(fdId);
+    }
+    const ops = getOps(event.sender.id, event.sender);
+    return ops.close(fdId);
+  }),
+);
 
-ipcMain.handle('fsa:watch', withEscalation(
-  (ops, watchId: string, dirPath: string) => ops.watch(watchId, dirPath),
-  (p, watchId: string, dirPath: string) => p.watch(watchId, dirPath) as Promise<{ ok: boolean }>,
-));
+ipcMain.handle(
+  'fsa:watch',
+  withErrorHandling(
+    withEscalation(
+      (ops, watchId: string, dirPath: string) => ops.watch(watchId, dirPath),
+      (p, watchId: string, dirPath: string) => p.watch(watchId, dirPath) as Promise<{ ok: boolean }>,
+    ),
+  ),
+);
 
-ipcMain.handle('fsa:unwatch', async (event, watchId: string) => {
-  const ops = getOps(event.sender.id, event.sender);
-  await ops.unwatch(watchId);
-  // Also unwatch from proxy in case it was escalated
-  if (proxy?.isAlive) {
-    await proxy.unwatch(watchId).catch(() => {});
-  }
-});
+ipcMain.handle(
+  'fsa:unwatch',
+  withErrorHandling(async (event, watchId: string) => {
+    const ops = getOps(event.sender.id, event.sender);
+    await ops.unwatch(watchId);
+    // Also unwatch from proxy in case it was escalated
+    if (proxy?.isAlive) {
+      await proxy.unwatch(watchId).catch(() => {});
+    }
+  }),
+);
 
 ipcMain.handle('utils:getAppPath', () => (app.isPackaged ? process.resourcesPath : app.getAppPath()));
 

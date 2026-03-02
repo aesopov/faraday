@@ -18,7 +18,7 @@ function helperPath(): string {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, `faraday-helper${ext}`);
   }
-  return path.join(app.getAppPath(), 'native', 'build', `faraday-helper${ext}`);
+  return path.join(app.getAppPath(), 'native-zig', 'zig-out', 'bin', `faraday-helper${ext}`);
 }
 
 function socketPath(): string {
@@ -117,7 +117,11 @@ export function launchElevated(): Promise<ElevatedChild> {
     });
 
     server.listen(sockPath, () => {
-      try { fs.chmodSync(sockPath, 0o600); } catch { /* best-effort */ }
+      try {
+        fs.chmodSync(sockPath, 0o600);
+      } catch {
+        /* best-effort */
+      }
       child = spawnElevated(helper, ['--socket', sockPath, '--token', token, '--ppid', String(process.pid)]);
 
       child.on('exit', (code) => {

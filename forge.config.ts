@@ -10,7 +10,7 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses';
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
-    extraResource: ['assets', process.platform === 'win32' ? 'native/build/faraday-helper.exe' : 'native/build/faraday-helper'],
+    extraResource: ['assets', process.platform === 'win32' ? 'native-zig/zig-out/bin/faraday-helper.exe' : 'native-zig/zig-out/bin/faraday-helper'],
   },
   rebuildConfig: {},
   makers: [new MakerSquirrel({}), new MakerZIP({}, ['darwin']), new MakerRpm({}), new MakerDeb({})],

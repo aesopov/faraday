@@ -1,4 +1,4 @@
-/// Binary IPC protocol — must stay in sync with src/protocol.ts and native/proto.h.
+/// Binary IPC protocol — must stay in sync with src/protocol.ts.
 ///
 /// Wire format: [4: payload_len (u32 LE)][payload...]
 const std = @import("std");

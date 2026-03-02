@@ -12,19 +12,29 @@ const readonlyError = () => {
   throw new Error('Filesystem is read-only');
 };
 
+const handleResponse = <T>(res: { result?: T; error?: any }): T => {
+  if (res.error) {
+    throw res.error instanceof Error ? res.error : new Error(String(res.error));
+  }
+  if (!('result' in res)) {
+    throw new Error('Invalid response from FS service');
+  }
+  return res.result;
+};
+
 const CHUNK_SIZE = 65536; // 64 KB
 
 function lazyReadMethods(fd: string, offset: number, length: number) {
   return {
     async arrayBuffer(): Promise<ArrayBuffer> {
-      return window.electron.fsa.read(fd, offset, length);
+      return handleResponse(await window.electron.fsa.read(fd, offset, length));
     },
     async text(): Promise<string> {
-      const buf = await window.electron.fsa.read(fd, offset, length);
+      const buf = handleResponse(await window.electron.fsa.read(fd, offset, length));
       return new TextDecoder().decode(buf);
     },
     async bytes(): Promise<Uint8Array<ArrayBuffer>> {
-      const buf = await window.electron.fsa.read(fd, offset, length);
+      const buf = handleResponse(await window.electron.fsa.read(fd, offset, length));
       return new Uint8Array(buf);
     },
     stream(): ReadableStream<Uint8Array<ArrayBuffer>> {
@@ -37,7 +47,7 @@ function lazyReadMethods(fd: string, offset: number, length: number) {
             return;
           }
           const chunkLen = Math.min(CHUNK_SIZE, remaining);
-          const buf = await window.electron.fsa.read(fd, offset + pos, chunkLen);
+          const buf = handleResponse(await window.electron.fsa.read(fd, offset + pos, chunkLen));
           pos += buf.byteLength;
           if (buf.byteLength === 0) {
             controller.close();
@@ -142,7 +152,7 @@ export class DirectoryHandle implements FileSystemDirectoryHandle {
   }
 
   async *entries(): FileSystemDirectoryHandleAsyncIterator<[string, FileSystemHandle]> {
-    const raw: FsaRawEntry[] = await window.electron.fsa.entries(this.path);
+    const raw: FsaRawEntry[] = handleResponse(await window.electron.fsa.entries(this.path));
     for (const entry of raw) {
       const childPath = join(this.path, entry.name);
       const meta = { size: entry.size, mtimeMs: entry.mtimeMs, mode: entry.mode, isSymbolicLink: entry.isSymbolicLink };
@@ -214,11 +224,11 @@ export class FileHandle implements FileSystemFileHandle {
     let size = this.meta?.size;
     let mtimeMs = this.meta?.mtimeMs;
     if (size === undefined) {
-      const stat = await window.electron.fsa.stat(this.path);
+      const stat = handleResponse(await window.electron.fsa.stat(this.path));
       size = stat.size;
       mtimeMs = stat.mtimeMs;
     }
-    const fd = await window.electron.fsa.open(this.path);
+    const fd = handleResponse(await window.electron.fsa.open(this.path));
     return new LazyFile(fd, size, this.name, mtimeMs ?? 0);
   }
 
@@ -258,14 +268,11 @@ export class FileSystemObserver {
     }
 
     const watchId = `fso-${nextWatchId++}`;
-    const result = await window.electron.fsa.watch(watchId, handle.path);
+    const result = handleResponse(await window.electron.fsa.watch(watchId, handle.path));
 
     if (!result.ok) {
       // Fire errored record immediately
-      this.#callback(
-        [{ root: handle, changedHandle: null, relativePathComponents: [], type: 'errored' }],
-        this,
-      );
+      this.#callback([{ root: handle, changedHandle: null, relativePathComponents: [], type: 'errored' }], this);
       return;
     }
 
@@ -297,14 +304,9 @@ export class FileSystemObserver {
     const root = this.#watches.get(event.watchId);
     if (!root) return;
 
-    const changedHandle: FileSystemHandle | null = event.name
-      ? new FileHandle(join(root.path, event.name), event.name)
-      : null;
+    const changedHandle: FileSystemHandle | null = event.name ? new FileHandle(join(root.path, event.name), event.name) : null;
     const relativePathComponents = event.name ? [event.name] : [];
 
-    this.#callback(
-      [{ root, changedHandle, relativePathComponents, type: event.type }],
-      this,
-    );
+    this.#callback([{ root, changedHandle, relativePathComponents, type: event.type }], this);
   }
 }

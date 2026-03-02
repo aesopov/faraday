@@ -23,17 +23,19 @@ export interface FsaRawEntry {
   isSymbolicLink: boolean;
 }
 
+type Result<T> = { result: T } | { error: any };
+
 export interface ElectronBridge {
   fsa: {
-    entries(dirPath: string): Promise<FsaRawEntry[]>;
-    readFile(filePath: string): Promise<string>;
-    stat(filePath: string): Promise<{ size: number; mtimeMs: number }>;
-    exists(filePath: string): Promise<boolean>;
-    open(filePath: string): Promise<string>;
-    read(fd: string, offset: number, length: number): Promise<ArrayBuffer>;
-    close(fd: string): Promise<void>;
-    watch(watchId: string, path: string): Promise<{ ok: boolean }>;
-    unwatch(watchId: string): Promise<void>;
+    entries(dirPath: string): Promise<Result<FsaRawEntry[]>>;
+    readFile(filePath: string): Promise<Result<string>>;
+    stat(filePath: string): Promise<Result<{ size: number; mtimeMs: number }>>;
+    exists(filePath: string): Promise<Result<boolean>>;
+    open(filePath: string): Promise<Result<string>>;
+    read(fd: string, offset: number, length: number): Promise<Result<ArrayBuffer>>;
+    close(fd: string): Promise<Result<void>>;
+    watch(watchId: string, path: string): Promise<Result<{ ok: boolean }>>;
+    unwatch(watchId: string): Promise<Result<void>>;
     onFsChange(callback: (event: FsChangeEvent) => void): () => void;
   };
   utils: {
@@ -48,7 +50,9 @@ export interface ElectronBridge {
 
 // IPC protocol types for privileged FS service
 
-export interface FsIpcAuth     { auth: string }
+export interface FsIpcAuth {
+  auth: string;
+}
 
 declare global {
   interface Window {

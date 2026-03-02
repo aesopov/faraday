@@ -3,6 +3,7 @@ import type { ResolvedEntryStyle } from '../types';
 // eslint-disable-next-line import/no-unresolved
 import fssSource from './material-icons.fs.css?raw';
 import { basename, dirname, join } from './path';
+import { DirectoryHandle } from './fsa';
 
 const baseLayer = createLayer(fssSource, '/', LayerPriority.GLOBAL);
 
@@ -35,10 +36,12 @@ export async function syncLayers(resolver: LayeredResolver, dirPath: string): Pr
   for (const p of ancestors) {
     if (basename(p) === '.faraday') continue;
     if (!fssSourceCache.has(p)) {
-      const fssPath = join(p, '.faraday', 'fs.css');
-      if (await window.electron.fsa.exists(fssPath)) {
-        fssSourceCache.set(p, await window.electron.fsa.readFile(fssPath));
-      } else {
+      const dir = join(p, '.faraday');
+      try {
+        const fileHandle = await new DirectoryHandle(dir).getFileHandle('fs.css');
+        const file = await fileHandle.getFile();
+        fssSourceCache.set(p, await file.text());
+      } catch {
         fssSourceCache.set(p, null);
       }
     }

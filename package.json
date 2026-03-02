@@ -11,7 +11,6 @@
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx .",
-    "build:helper": "cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release && cmake --build native/build",
     "build:helper-zig": "cd native-zig && zig build -Doptimize=ReleaseSmall"
   },
   "keywords": [],
