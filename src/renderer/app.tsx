@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FsChangeType } from '../types';
 import { detectLang } from '../langDetect';
 import { FileList } from './FileList';
+import { FileViewer } from './FileViewer';
 import { DirectoryHandle, FileSystemObserver, type FileSystemChangeRecord, type HandleMeta } from './fsa';
 import { createPanelResolver, invalidateFssCache, syncLayers } from './fss';
 import { basename, dirname, join } from './path';
@@ -213,6 +214,11 @@ export function App() {
   const left = usePanel(theme);
   const right = usePanel(theme);
   const [activePanel, setActivePanel] = useState<PanelSide>('left');
+  const [viewerFile, setViewerFile] = useState<{ path: string; name: string; size: number } | null>(null);
+
+  const handleViewFile = useCallback((filePath: string, fileName: string, fileSize: number) => {
+    setViewerFile({ path: filePath, name: fileName, size: fileSize });
+  }, []);
 
   useEffect(() => {
     window.electron.theme.get().then((t) => setTheme(t as ThemeKind));
@@ -256,6 +262,7 @@ export function App() {
             parentNode={left.parentNode}
             entries={left.entries}
             onNavigate={left.navigateTo}
+            onViewFile={handleViewFile}
             active={activePanel === 'left'}
             resolver={left.resolver}
           />
@@ -267,11 +274,20 @@ export function App() {
             parentNode={right.parentNode}
             entries={right.entries}
             onNavigate={right.navigateTo}
+            onViewFile={handleViewFile}
             active={activePanel === 'right'}
             resolver={right.resolver}
           />
         </div>
       </div>
+      {viewerFile && (
+        <FileViewer
+          filePath={viewerFile.path}
+          fileName={viewerFile.name}
+          fileSize={viewerFile.size}
+          onClose={() => setViewerFile(null)}
+        />
+      )}
     </div>
   );
 }

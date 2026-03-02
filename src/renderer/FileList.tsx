@@ -13,6 +13,7 @@ interface FileListProps {
   parentNode?: FsNode;
   entries: FsNode[];
   onNavigate: (path: string) => void;
+  onViewFile?: (filePath: string, fileName: string, fileSize: number) => void;
   active: boolean;
   resolver: LayeredResolver;
 }
@@ -40,7 +41,7 @@ function getIconUrl(iconName: string | null, isDirectory: boolean): string | und
   return getCachedIconUrl(isDirectory ? 'folder.svg' : 'file.svg');
 }
 
-export function FileList({ currentPath, parentNode, entries, onNavigate, active, resolver }: FileListProps) {
+export function FileList({ currentPath, parentNode, entries, onNavigate, onViewFile, active, resolver }: FileListProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [, setIconsVersion] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -112,12 +113,19 @@ export function FileList({ currentPath, parentNode, entries, onNavigate, active,
     overscan: 10,
   });
 
-  // When path changes, select the child we came from (if navigating up), otherwise reset to 0
+  // When path changes, select the child we came from (if navigating up), otherwise reset to 0.
+  // When only entries refresh (same path), clamp selection to valid range.
   useEffect(() => {
     const prevPath = prevPathRef.current;
     prevPathRef.current = currentPath;
 
-    if (prevPath !== currentPath && prevPath.startsWith(currentPath)) {
+    if (prevPath === currentPath) {
+      // Same directory — entries refreshed, just clamp
+      setSelectedIndex((i) => Math.min(i, displayEntries.length - 1));
+      return;
+    }
+
+    if (prevPath.startsWith(currentPath)) {
       const remainder = prevPath.slice(currentPath.length).replace(/^\//, '');
       const childName = remainder.split('/')[0];
       if (childName) {
@@ -144,9 +152,11 @@ export function FileList({ currentPath, parentNode, entries, onNavigate, active,
         onNavigate(dirname(currentPath));
       } else if (entry.type === 'folder') {
         onNavigate(join(currentPath, entry.name));
+      } else if (entry.type === 'file' && onViewFile) {
+        onViewFile(entry.path as string, entry.name, Number(entry.meta.size));
       }
     },
-    [currentPath, onNavigate],
+    [currentPath, onNavigate, onViewFile],
   );
 
   // Keyboard navigation (only when active)
@@ -191,12 +201,20 @@ export function FileList({ currentPath, parentNode, entries, onNavigate, active,
             onNavigate(dirname(currentPath));
           }
           break;
+        case 'F3': {
+          e.preventDefault();
+          const item = displayEntries[selectedIndex];
+          if (item && item.entry.type === 'file' && onViewFile) {
+            onViewFile(item.entry.path as string, item.entry.name, Number(item.entry.meta.size));
+          }
+          break;
+        }
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, currentPath, displayEntries, selectedIndex, isRoot, onNavigate, navigateToEntry]);
+  }, [active, currentPath, displayEntries, selectedIndex, isRoot, onNavigate, onViewFile, navigateToEntry]);
 
   return (
     <div className="file-list">
