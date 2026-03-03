@@ -27,6 +27,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
     napigen.setup(lib);
+    if (target.result.os.tag == .macos) {
+        lib.root_module.linkFramework("CoreServices", .{});
+    }
     b.installArtifact(lib);
 
     // Copy to .node extension so require() can find it

@@ -1,5 +1,3 @@
-import { watch, type FSWatcher } from 'node:fs';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { app } from 'electron';
 import type { FsChangeEvent, FsChangeType } from '../types';
@@ -14,6 +12,9 @@ interface NativeAddon {
   open(filePath: string): string;
   read(fdId: string, offset: number, length: number): Buffer;
   close(fdId: string): void;
+  setWatchCallback(cb: (watchId: string, type: string, name: string | null) => void): void;
+  watch(watchId: string, dirPath: string): { ok: boolean };
+  unwatch(watchId: string): void;
 }
 
 function loadAddon(): NativeAddon {
@@ -35,13 +36,18 @@ function loadAddon(): NativeAddon {
 
 const addon = loadAddon();
 
+// ── Global watch callback (broadcast to all windows) ─────────────────
+
+/** Register the global watch event callback. Call once during init. */
+export function initWatchCallback(cb: (event: FsChangeEvent) => void): void {
+  addon.setWatchCallback((watchId: string, type: string, name: string | null) => {
+    cb({ watchId, type: type as FsChangeType, name });
+  });
+}
+
 // ── NativeFs — unified RawFs using the Zig N-API addon ───────────────
 
 export class NativeFs implements RawFs {
-  private watchers = new Map<string, FSWatcher>();
-
-  constructor(private onWatchEvent?: (event: FsChangeEvent) => void) {}
-
   async entries(dirPath: string): Promise<FsaRawEntry[]> {
     return addon.entries(dirPath);
   }
@@ -67,51 +73,10 @@ export class NativeFs implements RawFs {
   }
 
   async watch(watchId: string, dirPath: string): Promise<{ ok: boolean }> {
-    try {
-      await fs.access(dirPath);
-    } catch {
-      return { ok: false };
-    }
-
-    this.watchers.get(watchId)?.close();
-
-    const watcher = watch(dirPath, async (eventType, filename) => {
-      let type: FsChangeType;
-      if (eventType === 'rename') {
-        try {
-          await fs.access(path.join(dirPath, filename ?? ''));
-          type = 'appeared';
-        } catch {
-          type = 'disappeared';
-        }
-      } else if (eventType === 'change') {
-        type = 'modified';
-      } else {
-        type = 'unknown';
-      }
-      this.onWatchEvent?.({ watchId, type, name: filename ?? null });
-    });
-
-    watcher.on('error', () => {
-      this.onWatchEvent?.({ watchId, type: 'errored', name: null });
-      watcher.close();
-      this.watchers.delete(watchId);
-    });
-
-    this.watchers.set(watchId, watcher);
-    return { ok: true };
+    return addon.watch(watchId, dirPath);
   }
 
   async unwatch(watchId: string): Promise<void> {
-    const watcher = this.watchers.get(watchId);
-    if (watcher) {
-      watcher.close();
-      this.watchers.delete(watchId);
-    }
-  }
-
-  closeAll(): void {
-    for (const watcher of this.watchers.values()) watcher.close();
-    this.watchers.clear();
+    addon.unwatch(watchId);
   }
 }

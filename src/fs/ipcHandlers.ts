@@ -1,56 +1,28 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import { launchElevated, type ElevatedChild } from './elevate';
 import { RawFs } from './types';
-import { NativeFs } from './native';
+import { NativeFs, initWatchCallback } from './native';
 import { FsProxy } from './fsProxy';
 import type { FsChangeEvent } from '../types';
 
 // ── Per-webContents resource tracking ────────────────────────────────
 
-const opsByContents = new Map<number, NativeFs>();
 const localFdsByContents = new Map<number, Set<string>>();
+const localWatchesByContents = new Map<number, Set<string>>();
 const proxyFdsByContents = new Map<number, Set<string>>();
 const proxyWatchesByContents = new Map<number, Set<string>>();
 
-function trackLocalFd(contentsId: number, fdId: string): void {
-  let set = localFdsByContents.get(contentsId);
+function trackSet(map: Map<number, Set<string>>, contentsId: number, id: string): void {
+  let set = map.get(contentsId);
   if (!set) {
     set = new Set();
-    localFdsByContents.set(contentsId, set);
+    map.set(contentsId, set);
   }
-  set.add(fdId);
+  set.add(id);
 }
 
-function trackProxyFd(contentsId: number, fdId: string): void {
-  let set = proxyFdsByContents.get(contentsId);
-  if (!set) {
-    set = new Set();
-    proxyFdsByContents.set(contentsId, set);
-  }
-  set.add(fdId);
-}
-
-function trackProxyWatch(contentsId: number, watchId: string): void {
-  let set = proxyWatchesByContents.get(contentsId);
-  if (!set) {
-    set = new Set();
-    proxyWatchesByContents.set(contentsId, set);
-  }
-  set.add(watchId);
-}
-
-function getOps(contentsId: number, sender: Electron.WebContents): NativeFs {
-  let ops = opsByContents.get(contentsId);
-  if (!ops) {
-    ops = new NativeFs((event) => {
-      if (!sender.isDestroyed()) {
-        sender.send('fsa:change', event);
-      }
-    });
-    opsByContents.set(contentsId, ops);
-  }
-  return ops;
-}
+// Singleton — all webContents share the same NativeFs (addon state is global)
+const nativeFs = new NativeFs();
 
 // ── Elevated proxy singleton ─────────────────────────────────────────
 
@@ -107,9 +79,8 @@ function withErrorHandling<A extends unknown[], T>(fn: (...args: A) => Promise<T
 
 function withEscalation<A extends unknown[], R>(fn: (ops: RawFs, ...args: A) => Promise<R>) {
   return async (event: Electron.IpcMainInvokeEvent, ...args: A): Promise<R> => {
-    const ops = getOps(event.sender.id, event.sender);
     try {
-      return await fn(ops, ...args);
+      return await fn(nativeFs, ...args);
     } catch (err) {
       if (!isElevatable(err)) throw err;
       const p = await getProxy();
@@ -122,22 +93,21 @@ function withEscalation<A extends unknown[], R>(fn: (ops: RawFs, ...args: A) => 
 
 /** Clean up all fs resources owned by a webContents. */
 export function cleanupContents(contentsId: number): void {
-  const ops = opsByContents.get(contentsId);
-  if (ops) {
-    ops.closeAll();
-    opsByContents.delete(contentsId);
-  }
-
-  // Clean up local fds tracked by the native addon's global FdTable
+  // Clean up local fds
   const localFds = localFdsByContents.get(contentsId);
   if (localFds) {
-    const anyOps = opsByContents.values().next().value;
-    if (anyOps) {
-      for (const fdId of localFds) anyOps.close(fdId).catch(() => {});
-    }
+    for (const fdId of localFds) nativeFs.close(fdId).catch(() => {});
   }
   localFdsByContents.delete(contentsId);
 
+  // Clean up local watches
+  const localWatches = localWatchesByContents.get(contentsId);
+  if (localWatches) {
+    for (const watchId of localWatches) nativeFs.unwatch(watchId).catch(() => {});
+  }
+  localWatchesByContents.delete(contentsId);
+
+  // Clean up elevated proxy resources
   const p = proxy;
   if (p?.isAlive) {
     const fds = proxyFdsByContents.get(contentsId);
@@ -155,12 +125,15 @@ export function cleanupContents(contentsId: number): void {
 
 /** Clean up all sessions and kill the elevated helper. */
 export function cleanupAll(): void {
-  for (const contentsId of opsByContents.keys()) cleanupContents(contentsId);
+  for (const contentsId of localFdsByContents.keys()) cleanupContents(contentsId);
   proxyChild?.kill();
 }
 
 /** Register all fsa:* IPC handlers. Call once at startup. */
 export function registerFsHandlers(): void {
+  // Native watch events are broadcast to all windows
+  initWatchCallback(broadcastWatchEvent);
+
   ipcMain.handle('fsa:entries', withErrorHandling(withEscalation((fs, dirPath: string) => fs.entries(dirPath))));
 
   ipcMain.handle('fsa:stat', withErrorHandling(withEscalation((fs, filePath: string) => fs.stat(filePath))));
@@ -170,16 +143,15 @@ export function registerFsHandlers(): void {
   ipcMain.handle(
     'fsa:open',
     withErrorHandling(async (event, filePath: string) => {
-      const ops = getOps(event.sender.id, event.sender);
       try {
-        const fdId = await ops.open(filePath);
-        trackLocalFd(event.sender.id, fdId);
+        const fdId = await nativeFs.open(filePath);
+        trackSet(localFdsByContents, event.sender.id, fdId);
         return fdId;
       } catch (err) {
         if (!isElevatable(err)) throw err;
         const p = await getProxy();
         const fdId = await p.open(filePath);
-        trackProxyFd(event.sender.id, fdId);
+        trackSet(proxyFdsByContents, event.sender.id, fdId);
         return fdId;
       }
     }),
@@ -187,15 +159,14 @@ export function registerFsHandlers(): void {
 
   ipcMain.handle(
     'fsa:read',
-    withErrorHandling(async (event, fdId: string, offset: number, length: number) => {
+    withErrorHandling(async (_event, fdId: string, offset: number, length: number) => {
       if (fdId.startsWith('proxy:')) {
         const p = proxy;
         if (!p?.isAlive) throw new Error('Elevated FS service is not connected');
         const buf = await p.read(fdId, offset, length);
         return buf instanceof Buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf;
       }
-      const ops = getOps(event.sender.id, event.sender);
-      const buf = await ops.read(fdId, offset, length);
+      const buf = await nativeFs.read(fdId, offset, length);
       return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
     }),
   );
@@ -210,22 +181,22 @@ export function registerFsHandlers(): void {
         return p.close(fdId);
       }
       localFdsByContents.get(event.sender.id)?.delete(fdId);
-      const ops = getOps(event.sender.id, event.sender);
-      return ops.close(fdId);
+      return nativeFs.close(fdId);
     }),
   );
 
   ipcMain.handle(
     'fsa:watch',
     withErrorHandling(async (event, watchId: string, dirPath: string) => {
-      const ops = getOps(event.sender.id, event.sender);
       try {
-        return await ops.watch(watchId, dirPath);
+        const result = await nativeFs.watch(watchId, dirPath);
+        if (result.ok) trackSet(localWatchesByContents, event.sender.id, watchId);
+        return result;
       } catch (err) {
         if (!isElevatable(err)) throw err;
         const p = await getProxy();
         const result = await p.watch(watchId, dirPath);
-        trackProxyWatch(event.sender.id, watchId);
+        trackSet(proxyWatchesByContents, event.sender.id, watchId);
         return result;
       }
     }),
@@ -234,9 +205,9 @@ export function registerFsHandlers(): void {
   ipcMain.handle(
     'fsa:unwatch',
     withErrorHandling(async (event, watchId: string) => {
+      localWatchesByContents.get(event.sender.id)?.delete(watchId);
+      await nativeFs.unwatch(watchId);
       proxyWatchesByContents.get(event.sender.id)?.delete(watchId);
-      const ops = getOps(event.sender.id, event.sender);
-      await ops.unwatch(watchId);
       if (proxy?.isAlive) {
         await proxy.unwatch(watchId).catch(() => {});
       }
