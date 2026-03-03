@@ -44,8 +44,8 @@ pub const Watcher = struct {
         self.impl.remove(self.allocator, id);
     }
 
-    /// Pollable fd for the main loop (kqueue/inotify). Returns -1 on unsupported platforms.
-    pub fn pollFd(self: *const Watcher) posix.fd_t {
+    /// Pollable fd for the main loop (kqueue/inotify). Returns null on unsupported platforms.
+    pub fn pollFd(self: *const Watcher) ?posix.fd_t {
         return self.impl.fd();
     }
 
@@ -87,7 +87,7 @@ const KqueueImpl = struct {
         posix.close(self.kq);
     }
 
-    fn fd(self: *const KqueueImpl) posix.fd_t {
+    fn fd(self: *const KqueueImpl) ?posix.fd_t {
         return self.kq;
     }
 
@@ -189,7 +189,7 @@ const InotifyImpl = struct {
         posix.close(self.ifd);
     }
 
-    fn fd(self: *const InotifyImpl) posix.fd_t {
+    fn fd(self: *const InotifyImpl) ?posix.fd_t {
         return self.ifd;
     }
 
@@ -265,8 +265,8 @@ const NoopImpl = struct {
         return .{};
     }
     fn deinit(_: *NoopImpl, _: Allocator) void {}
-    fn fd(_: *const NoopImpl) posix.fd_t {
-        return -1;
+    fn fd(_: *const NoopImpl) ?posix.fd_t {
+        return null;
     }
     fn add(_: *NoopImpl, _: Allocator, _: []const u8, _: []const u8) !void {
         return error.NotSupported;

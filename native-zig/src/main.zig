@@ -18,11 +18,13 @@ const Args = struct {
     token: []const u8,
 };
 
-fn parseArgs() !Args {
+fn parseArgs(allocator: Allocator) !Args {
+    var args = try std.process.argsWithAllocator(allocator);
+    defer args.deinit();
+
     var socket_path: ?[]const u8 = null;
     var token: ?[]const u8 = null;
 
-    var args = std.process.args();
     _ = args.next(); // skip argv[0]
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--socket")) {
@@ -149,7 +151,7 @@ fn handleRequest(
 
 // ── Watch event callback (needs socket fd via closure workaround) ────
 
-var g_sock_fd: posix.fd_t = -1;
+var g_sock_fd: posix.fd_t = if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else -1;
 var g_allocator: Allocator = undefined;
 
 fn onWatchEvent(watch_id: []const u8, kind_str: []const u8, name: ?[]const u8) void {
@@ -173,10 +175,15 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const args = parseArgs() catch {
+    const args = parseArgs(allocator) catch {
         std.debug.print("Usage: faraday-helper --socket <path> --token <hex>\n", .{});
         std.process.exit(1);
     };
+
+    if (comptime builtin.os.tag == .windows) {
+        std.debug.print("Windows named pipe transport not yet implemented\n", .{});
+        std.process.exit(1);
+    }
 
     // Parent death detection (Linux)
     if (comptime builtin.os.tag == .linux) {
@@ -224,12 +231,12 @@ pub fn main() !void {
     defer msg_reader.deinit();
 
     const watch_fd = watcher.pollFd();
-    const nfds: usize = if (watch_fd >= 0) 2 else 1;
+    const nfds: usize = if (watch_fd != null) 2 else 1;
 
     while (true) {
         var pfds = [2]posix.pollfd{
             .{ .fd = fd, .events = posix.POLL.IN, .revents = 0 },
-            .{ .fd = watch_fd, .events = posix.POLL.IN, .revents = 0 },
+            .{ .fd = watch_fd orelse fd, .events = posix.POLL.IN, .revents = 0 },
         };
 
         _ = posix.poll(pfds[0..nfds], -1) catch break;
