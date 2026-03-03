@@ -1,5 +1,5 @@
 import type net from 'node:net';
-import type { FsChangeEvent, FsChangeType } from './types';
+import type { FsChangeEvent, FsChangeType } from '../types';
 import {
   MSG_RESPONSE,
   MSG_ERROR,
@@ -16,8 +16,8 @@ import {
   EVT_TYPES,
   BufReader,
   BufWriter,
-} from './protocol';
-import { FsaRawEntry, RawFs } from './fs/types';
+} from '../protocol';
+import { FsaRawEntry, RawFs } from './types';
 
 type Pending = { resolve: (payload: Buffer) => void; reject: (e: Error) => void };
 

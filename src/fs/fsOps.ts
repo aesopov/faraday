@@ -1,8 +1,8 @@
 import { watch, type FSWatcher } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { FsChangeEvent, FsChangeType } from './types';
-import { FsaRawEntry, RawFs } from './fs/types';
+import type { FsChangeEvent, FsChangeType } from '../types';
+import { FsaRawEntry, RawFs } from './types';
 
 type NodeFileHandle = Awaited<ReturnType<typeof fs.open>>;
 

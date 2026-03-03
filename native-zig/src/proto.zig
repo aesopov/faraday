@@ -3,8 +3,9 @@
 /// Wire format: [4: payload_len (u32 LE)][payload...]
 const std = @import("std");
 const builtin = @import("builtin");
-const posix = std.posix;
 const Allocator = std.mem.Allocator;
+
+pub const File = std.fs.File;
 
 // ── Message types ────────────────────────────────────────────────────
 
@@ -152,11 +153,11 @@ pub const MsgReader = struct {
         self.buf.deinit(self.allocator);
     }
 
-    /// Read available data from `fd`. Returns bytes read (0 = EOF).
-    pub fn fill(self: *MsgReader, fd: posix.fd_t) !usize {
+    /// Read available data from `file`. Returns bytes read (0 = EOF).
+    pub fn fill(self: *MsgReader, file: File) !usize {
         try self.buf.ensureTotalCapacity(self.allocator, self.buf.items.len + 4096);
         const space = self.buf.allocatedSlice()[self.buf.items.len..];
-        const n = try posix.read(fd, space);
+        const n = file.read(space) catch |err| return err;
         self.buf.items.len += n;
         return n;
     }
@@ -184,17 +185,10 @@ pub const MsgReader = struct {
 
 // ── Wire I/O ─────────────────────────────────────────────────────────
 
-/// Write a length-prefixed message to `fd`.
-pub fn writeMsg(fd: posix.fd_t, data: []const u8) !void {
+/// Write a length-prefixed message to `file`.
+pub fn writeMsg(file: File, data: []const u8) !void {
     var header: [4]u8 = undefined;
     std.mem.writeInt(u32, &header, @intCast(data.len), .little);
-    try writeAll(fd, &header);
-    if (data.len > 0) try writeAll(fd, data);
-}
-
-fn writeAll(fd: posix.fd_t, data: []const u8) !void {
-    var off: usize = 0;
-    while (off < data.len) {
-        off += try posix.write(fd, data[off..]);
-    }
+    try file.writeAll(&header);
+    if (data.len > 0) try file.writeAll(data);
 }

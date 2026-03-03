@@ -2,18 +2,38 @@ import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron';
 import started from 'electron-squirrel-startup';
 import os from 'node:os';
 import path from 'node:path';
-import { launchElevated, type ElevatedChild } from './elevate';
+import { launchElevated, type ElevatedChild } from './fs/elevate';
 import { RawFs } from './fs/types';
-import { FsOps } from './fsOps';
-import { FsProxy } from './fsProxy';
+import { FsOps } from './fs/fsOps';
+import { FsProxy } from './fs/fsProxy';
 import type { FsChangeEvent } from './types';
 
 if (started) {
   app.quit();
 }
 
-// Per-webContents FsOps instances
+// Per-webContents FsOps instances and escalated resource tracking
 const opsByContents = new Map<number, FsOps>();
+const proxyFdsByContents = new Map<number, Set<string>>();
+const proxyWatchesByContents = new Map<number, Set<string>>();
+
+function trackProxyFd(contentsId: number, fdId: string): void {
+  let set = proxyFdsByContents.get(contentsId);
+  if (!set) {
+    set = new Set();
+    proxyFdsByContents.set(contentsId, set);
+  }
+  set.add(fdId);
+}
+
+function trackProxyWatch(contentsId: number, watchId: string): void {
+  let set = proxyWatchesByContents.get(contentsId);
+  if (!set) {
+    set = new Set();
+    proxyWatchesByContents.set(contentsId, set);
+  }
+  set.add(watchId);
+}
 
 function getOps(contentsId: number, sender: Electron.WebContents): FsOps {
   let ops = opsByContents.get(contentsId);
@@ -34,6 +54,21 @@ function cleanupContents(contentsId: number): void {
     ops.closeAll();
     opsByContents.delete(contentsId);
   }
+
+  // Clean up escalated resources in the Zig helper
+  const p = proxy;
+  if (p?.isAlive) {
+    const fds = proxyFdsByContents.get(contentsId);
+    if (fds) {
+      for (const fdId of fds) p.close(fdId).catch(() => {});
+    }
+    const watches = proxyWatchesByContents.get(contentsId);
+    if (watches) {
+      for (const watchId of watches) p.unwatch(watchId).catch(() => {});
+    }
+  }
+  proxyFdsByContents.delete(contentsId);
+  proxyWatchesByContents.delete(contentsId);
 }
 
 // Elevated FS proxy — singleton, lazily launched
@@ -111,7 +146,21 @@ ipcMain.handle('fsa:stat', withErrorHandling(withEscalation((fs, filePath: strin
 
 ipcMain.handle('fsa:exists', withErrorHandling(withEscalation((fs, filePath: string) => fs.exists(filePath))));
 
-ipcMain.handle('fsa:open', withErrorHandling(withEscalation((fs, filePath: string) => fs.open(filePath))));
+ipcMain.handle(
+  'fsa:open',
+  withErrorHandling(async (event, filePath: string) => {
+    const ops = getOps(event.sender.id, event.sender);
+    try {
+      return await ops.open(filePath);
+    } catch (err) {
+      if (!isElevatable(err)) throw err;
+      const p = await getProxy();
+      const fdId = await p.open(filePath);
+      trackProxyFd(event.sender.id, fdId);
+      return fdId;
+    }
+  }),
+);
 
 ipcMain.handle(
   'fsa:read',
@@ -132,6 +181,7 @@ ipcMain.handle(
   'fsa:close',
   withErrorHandling(async (event, fdId: string) => {
     if (fdId.startsWith('proxy:')) {
+      proxyFdsByContents.get(event.sender.id)?.delete(fdId);
       const p = proxy;
       if (!p?.isAlive) return;
       return p.close(fdId);
@@ -141,11 +191,26 @@ ipcMain.handle(
   }),
 );
 
-ipcMain.handle('fsa:watch', withErrorHandling(withEscalation((fs, watchId: string, dirPath: string) => fs.watch(watchId, dirPath))));
+ipcMain.handle(
+  'fsa:watch',
+  withErrorHandling(async (event, watchId: string, dirPath: string) => {
+    const ops = getOps(event.sender.id, event.sender);
+    try {
+      return await ops.watch(watchId, dirPath);
+    } catch (err) {
+      if (!isElevatable(err)) throw err;
+      const p = await getProxy();
+      const result = await p.watch(watchId, dirPath);
+      trackProxyWatch(event.sender.id, watchId);
+      return result;
+    }
+  }),
+);
 
 ipcMain.handle(
   'fsa:unwatch',
   withErrorHandling(async (event, watchId: string) => {
+    proxyWatchesByContents.get(event.sender.id)?.delete(watchId);
     const ops = getOps(event.sender.id, event.sender);
     await ops.unwatch(watchId);
     // Also unwatch from proxy in case it was escalated

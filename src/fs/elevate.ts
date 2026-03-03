@@ -5,7 +5,7 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { app } from 'electron';
-import { MSG_AUTH } from './protocol';
+import { MSG_AUTH } from '../protocol';
 
 export interface ElevatedChild {
   socket: net.Socket;

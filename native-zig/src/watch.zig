@@ -15,6 +15,7 @@ pub const Watcher = struct {
     const Impl = switch (builtin.os.tag) {
         .macos => KqueueImpl,
         .linux => InotifyImpl,
+        .windows => WindowsImpl,
         else => NoopImpl,
     };
 
@@ -44,7 +45,7 @@ pub const Watcher = struct {
         self.impl.remove(self.allocator, id);
     }
 
-    /// Pollable fd for the main loop (kqueue/inotify). Returns null on unsupported platforms.
+    /// Pollable fd for the main loop (kqueue/inotify). Returns null on Windows.
     pub fn pollFd(self: *const Watcher) ?posix.fd_t {
         return self.impl.fd();
     }
@@ -59,6 +60,28 @@ pub const Watcher = struct {
 
     pub fn parentDied(self: *const Watcher) bool {
         return self.impl.parent_dead;
+    }
+
+    /// Fill `buf` with event HANDLEs for WaitForMultipleObjects (Windows only).
+    /// Returns the number of handles written.
+    pub fn fillEventHandles(self: *const Watcher, buf: []std.os.windows.HANDLE) usize {
+        if (comptime builtin.os.tag != .windows) return 0;
+        var n: usize = 0;
+        for (self.impl.watches.items) |e| {
+            if (n >= buf.len) break;
+            if (e.handle.pending) {
+                buf[n] = e.handle.event;
+                n += 1;
+            }
+        }
+        return n;
+    }
+
+    /// Process a directory change event by its handle index (Windows only).
+    /// `handle_idx` corresponds to the order returned by `fillEventHandles`.
+    pub fn processEventAt(self: *Watcher, handle_idx: usize, cb: EventCallback) void {
+        if (comptime builtin.os.tag != .windows) return;
+        self.impl.processEventAt(handle_idx, cb);
     }
 };
 
@@ -253,6 +276,192 @@ const InotifyImpl = struct {
     fn watchParent(_: *InotifyImpl, _: posix.pid_t) void {
         // Linux uses prctl(PR_SET_PDEATHSIG) instead — handled in main.
     }
+};
+
+// ── Windows: ReadDirectoryChangesW ──────────────────────────────────
+
+const WindowsImpl = struct {
+    const w = std.os.windows;
+
+    /// Per-watch state. Heap-allocated so OVERLAPPED pointers remain stable
+    /// across ArrayList reallocations (ReadDirectoryChangesW holds a reference).
+    const WatchState = struct {
+        dir_handle: w.HANDLE,
+        event: w.HANDLE,
+        overlapped: w.OVERLAPPED,
+        buf: [4096]u8 align(@alignOf(w.FILE_NOTIFY_INFORMATION)),
+        pending: bool,
+    };
+
+    const Handle = *WatchState;
+
+    watches: std.ArrayList(Watcher.WatchEntry) = .empty,
+    parent_dead: bool = false,
+
+    fn init(_: Allocator) !WindowsImpl {
+        return .{};
+    }
+
+    fn deinit(self: *WindowsImpl, allocator: Allocator) void {
+        for (self.watches.items) |e| {
+            cancelAndClose(e.handle);
+            allocator.free(e.id);
+            allocator.free(e.path);
+            allocator.destroy(e.handle);
+        }
+        self.watches.deinit(allocator);
+    }
+
+    fn fd(_: *const WindowsImpl) ?posix.fd_t {
+        return null; // Windows uses fillEventHandles / WaitForMultipleObjects
+    }
+
+    fn add(self: *WindowsImpl, allocator: Allocator, id: []const u8, path: []const u8) !void {
+        self.remove(allocator, id);
+
+        // Convert UTF-8 path to wide string
+        var w_buf: [std.fs.max_path_bytes]u16 = undefined;
+        const w_len = try std.unicode.utf8ToUtf16Le(&w_buf, path);
+        w_buf[w_len] = 0;
+        const w_path: [*:0]const u16 = @ptrCast(w_buf[0..w_len :0]);
+
+        // Open directory for reading changes (overlapped)
+        const dir_handle = w.kernel32.CreateFileW(
+            w_path,
+            w.FILE_LIST_DIRECTORY,
+            w.FILE_SHARE_READ | w.FILE_SHARE_WRITE | w.FILE_SHARE_DELETE,
+            null,
+            w.OPEN_EXISTING,
+            w.FILE_FLAG_BACKUP_SEMANTICS | w.FILE_FLAG_OVERLAPPED,
+            null,
+        );
+        if (dir_handle == w.INVALID_HANDLE_VALUE) return error.AccessDenied;
+        errdefer w.CloseHandle(dir_handle);
+
+        // Create auto-reset event
+        const event = try w.CreateEventExW(null, null, 0, w.EVENT_ALL_ACCESS);
+        errdefer w.CloseHandle(event);
+
+        const state = try allocator.create(WatchState);
+        state.* = .{
+            .dir_handle = dir_handle,
+            .event = event,
+            .overlapped = std.mem.zeroes(w.OVERLAPPED),
+            .buf = undefined,
+            .pending = false,
+        };
+        state.overlapped.hEvent = event;
+
+        issueRead(state);
+
+        try self.watches.append(allocator, .{
+            .id = try allocator.dupe(u8, id),
+            .path = try allocator.dupe(u8, path),
+            .handle = state,
+        });
+    }
+
+    fn remove(self: *WindowsImpl, allocator: Allocator, id: []const u8) void {
+        for (self.watches.items, 0..) |e, i| {
+            if (std.mem.eql(u8, e.id, id)) {
+                cancelAndClose(e.handle);
+                allocator.free(e.id);
+                allocator.free(e.path);
+                allocator.destroy(e.handle);
+                _ = self.watches.orderedRemove(i);
+                return;
+            }
+        }
+    }
+
+    fn process(_: *WindowsImpl, _: EventCallback) void {
+        // Not used on Windows — main loop calls processEventAt directly.
+    }
+
+    fn processEventAt(self: *WindowsImpl, handle_idx: usize, cb: EventCallback) void {
+        // Map handle_idx back to the watch entry (matches fillEventHandles order)
+        var idx: usize = 0;
+        for (self.watches.items) |*e| {
+            if (!e.handle.pending) continue;
+            if (idx == handle_idx) {
+                const bytes = w.GetOverlappedResult(e.handle.dir_handle, &e.handle.overlapped, false) catch {
+                    cb(e.id, "errored", null);
+                    e.handle.pending = false;
+                    return;
+                };
+                if (bytes > 0) {
+                    parseNotifications(e.id, &e.handle.buf, cb);
+                }
+                // Re-issue read for next batch of changes
+                issueRead(e.handle);
+                return;
+            }
+            idx += 1;
+        }
+    }
+
+    fn issueRead(state: *WatchState) void {
+        state.overlapped = std.mem.zeroes(w.OVERLAPPED);
+        state.overlapped.hEvent = state.event;
+        state.pending = w.kernel32.ReadDirectoryChangesW(
+            state.dir_handle,
+            @ptrCast(&state.buf),
+            state.buf.len,
+            w.FALSE, // don't watch subtree
+            @bitCast(w.FileNotifyChangeFilter{
+                .file_name = true,
+                .dir_name = true,
+                .size = true,
+                .last_write = true,
+            }),
+            null,
+            &state.overlapped,
+            null,
+        ) != 0;
+    }
+
+    fn cancelAndClose(state: *WatchState) void {
+        if (state.pending) {
+            _ = w.kernel32.CancelIo(state.dir_handle);
+            // Wait for the cancellation to complete
+            _ = w.GetOverlappedResult(state.dir_handle, &state.overlapped, true) catch {};
+        }
+        w.CloseHandle(state.event);
+        w.CloseHandle(state.dir_handle);
+    }
+
+    fn parseNotifications(watch_id: []const u8, buf: []const u8, cb: EventCallback) void {
+        var off: usize = 0;
+        while (off < buf.len) {
+            if (off + @sizeOf(w.FILE_NOTIFY_INFORMATION) > buf.len) break;
+            const info: *const w.FILE_NOTIFY_INFORMATION = @alignCast(@ptrCast(buf[off..]));
+            const name_offset = off + @sizeOf(w.FILE_NOTIFY_INFORMATION);
+            const name_end = name_offset + info.FileNameLength;
+            if (name_end > buf.len) break;
+
+            // Convert wide char filename to UTF-8
+            const wide_name: [*]const u16 = @alignCast(@ptrCast(buf[name_offset..]));
+            const wide_len = info.FileNameLength / 2;
+            var name_buf: [std.fs.max_path_bytes]u8 = undefined;
+            const name: ?[]const u8 = if (wide_len > 0) blk: {
+                const n = std.unicode.utf16LeToUtf8(&name_buf, wide_name[0..wide_len]) catch break :blk null;
+                break :blk name_buf[0..n];
+            } else null;
+
+            const kind: []const u8 = switch (info.Action) {
+                w.FILE_ACTION_ADDED, w.FILE_ACTION_RENAMED_NEW_NAME => "appeared",
+                w.FILE_ACTION_REMOVED, w.FILE_ACTION_RENAMED_OLD_NAME => "disappeared",
+                w.FILE_ACTION_MODIFIED => "modified",
+                else => "unknown",
+            };
+            cb(watch_id, kind, name);
+
+            if (info.NextEntryOffset == 0) break;
+            off += info.NextEntryOffset;
+        }
+    }
+
+    fn watchParent(_: *WindowsImpl, _: posix.pid_t) void {}
 };
 
 // ── Stub for unsupported platforms ───────────────────────────────────
