@@ -23,9 +23,7 @@ function loadAddon(): NativeAddon {
         process.resourcesPath,
         process.platform === 'darwin'
           ? 'libfaraday_napi.dylib'
-          : process.platform === 'win32'
-            ? 'faraday_napi.dll'
-            : 'libfaraday_napi.so',
+          : 'faraday_napi.node',
       )
     : path.join(app.getAppPath(), 'native-zig', 'zig-out', 'lib', 'faraday_napi.node');
 
