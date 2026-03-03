@@ -168,7 +168,7 @@ fn watchPollWindows() void {
     };
 
     if (n == 0) {
-        std.time.sleep(200_000_000);
+        std.Thread.sleep(200_000_000);
         return;
     }
 
