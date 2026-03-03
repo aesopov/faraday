@@ -175,7 +175,7 @@ const InotifyImpl = struct {
 
     fn init(_: Allocator) !InotifyImpl {
         return .{
-            .ifd = try posix.inotify_init1(.{ .NONBLOCK = true, .CLOEXEC = true }),
+            .ifd = try posix.inotify_init1(std.os.linux.IN.NONBLOCK | std.os.linux.IN.CLOEXEC),
         };
     }
 
@@ -195,7 +195,8 @@ const InotifyImpl = struct {
 
     fn add(self: *InotifyImpl, allocator: Allocator, id: []const u8, path: []const u8) !void {
         self.remove(allocator, id);
-        const mask = std.os.linux.IN{ .CREATE = true, .DELETE = true, .MODIFY = true, .MOVED_FROM = true, .MOVED_TO = true, .DELETE_SELF = true, .MOVE_SELF = true };
+        const linux = std.os.linux;
+        const mask: u32 = linux.IN.CREATE | linux.IN.DELETE | linux.IN.MODIFY | linux.IN.MOVED_FROM | linux.IN.MOVED_TO | linux.IN.DELETE_SELF | linux.IN.MOVE_SELF;
         const wd = try posix.inotify_add_watch(self.ifd, path, mask);
         try self.watches.append(allocator, .{
             .id = try allocator.dupe(u8, id),
@@ -233,7 +234,7 @@ const InotifyImpl = struct {
                 off += @sizeOf(std.os.linux.inotify_event) + ev.len;
                 continue;
             };
-            const name: ?[]const u8 = if (ev.len > 0) std.mem.sliceTo(@as([*:0]const u8, @ptrCast(&ev.name)), 0) else null;
+            const name: ?[]const u8 = ev.getName();
             const mask = ev.mask;
             if (mask & (std.os.linux.IN.DELETE_SELF | std.os.linux.IN.MOVE_SELF) != 0)
                 cb(wid, "errored", null)
