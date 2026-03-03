@@ -21,7 +21,6 @@ export class FsOps implements RawFs {
         let size = 0;
         let mtimeMs = 0;
         let mode = 0;
-        let isSymbolicLink = false;
         try {
           const s = await fs.stat(fullPath);
           size = s.size;
@@ -30,7 +29,7 @@ export class FsOps implements RawFs {
         } catch {
           // Skip stat errors (e.g. permission denied)
         }
-        isSymbolicLink = d.isSymbolicLink();
+        const isSymbolicLink = d.isSymbolicLink();
         return { name: d.name, kind: d.isDirectory() ? 'directory' : 'file', size, mtimeMs, mode, isSymbolicLink } as FsaRawEntry;
       }),
     );

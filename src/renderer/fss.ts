@@ -1,9 +1,8 @@
 import { createLayer, FsNode, LayeredResolver, LayerPriority, type StyleLayer, type ThemeKind } from 'fss-lang';
 import type { ResolvedEntryStyle } from '../types';
-// eslint-disable-next-line import/no-unresolved
+import { DirectoryHandle } from './fsa';
 import fssSource from './material-icons.fs.css?raw';
 import { basename, dirname, join } from './path';
-import { DirectoryHandle } from './fsa';
 
 const baseLayer = createLayer(fssSource, '/', LayerPriority.GLOBAL);
 

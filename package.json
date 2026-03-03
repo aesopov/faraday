@@ -10,7 +10,7 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
-    "lint": "eslint --ext .ts,.tsx .",
+    "lint": "eslint",
     "build:helper-zig": "cd native-zig && zig build -Doptimize=ReleaseSmall"
   },
   "keywords": [],
@@ -29,6 +29,7 @@
     "@electron-forge/plugin-fuses": "^7.11.1",
     "@electron-forge/plugin-vite": "^7.11.1",
     "@electron/fuses": "^2.1.0",
+    "@eslint/js": "^10.0.1",
     "@types/electron-squirrel-startup": "^1.0.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -37,7 +38,10 @@
     "electron": "40.6.1",
     "eslint": "^10.0.2",
     "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.0.1",
     "typescript": "~5.9.3",
+    "typescript-eslint": "^8.56.1",
     "vite": "^7.3.1"
   },
   "dependencies": {
@@ -47,5 +51,6 @@
     "memfs": "^4.56.10",
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
-  }
+  },
+  "packageManager": "pnpm@10.30.3"
 }
