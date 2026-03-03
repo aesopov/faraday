@@ -11,7 +11,8 @@
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint",
-    "build:helper-zig": "cd native-zig && zig build -Doptimize=ReleaseSmall"
+    "build:helper-zig": "cd native-zig && zig build -Doptimize=ReleaseSmall",
+    "build:napi": "cd native-zig && zig build"
   },
   "keywords": [],
   "author": {

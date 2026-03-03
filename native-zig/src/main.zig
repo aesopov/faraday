@@ -136,15 +136,39 @@ fn dispatch(
 ) !void {
     switch (method) {
         .ping => {},
-        .entries => try ops.entries(try reader.str(), out),
-        .stat => try ops.stat(try reader.str(), out),
-        .exists => try ops.exists(try reader.str(), out),
-        .open => try ops.open(try reader.str(), out, fdt),
+        .entries => {
+            var arena = std.heap.ArenaAllocator.init(allocator);
+            defer arena.deinit();
+            const list = try ops.entries(try reader.str(), arena.allocator());
+            try out.u32_(@intCast(list.items.len));
+            for (list.items) |item| {
+                try out.str_(item.name);
+                try out.u8_(if (std.mem.eql(u8, item.kind, "directory")) 1 else 0);
+                try out.f64_(item.size);
+                try out.f64_(item.mtimeMs);
+                try out.u32_(item.mode);
+                try out.u8_(if (item.isSymbolicLink) 1 else 0);
+            }
+        },
+        .stat => {
+            const result = try ops.stat(try reader.str());
+            try out.f64_(result.size);
+            try out.f64_(result.mtimeMs);
+        },
+        .exists => {
+            try out.u8_(if (ops.exists(try reader.str())) 1 else 0);
+        },
+        .open => {
+            const id = try ops.open(try reader.str(), fdt);
+            try out.str_(id);
+        },
         .read => {
             const fd_id = try reader.str();
             const offset: i64 = @intFromFloat(try reader.f64_());
             const length: usize = @intFromFloat(try reader.f64_());
-            try ops.read(fd_id, offset, length, out, fdt, allocator);
+            const data = try ops.read(fd_id, offset, length, fdt, allocator);
+            defer allocator.free(data);
+            try out.bytes(data);
         },
         .close => ops.close(try reader.str(), fdt),
         .watch => {

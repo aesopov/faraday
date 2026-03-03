@@ -10,7 +10,15 @@ import { FuseV1Options, FuseVersion } from '@electron/fuses';
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
-    extraResource: ['assets', process.platform === 'win32' ? 'native-zig/zig-out/bin/faraday-helper.exe' : 'native-zig/zig-out/bin/faraday-helper'],
+    extraResource: [
+      'assets',
+      process.platform === 'win32' ? 'native-zig/zig-out/bin/faraday-helper.exe' : 'native-zig/zig-out/bin/faraday-helper',
+      process.platform === 'darwin'
+        ? 'native-zig/zig-out/lib/libfaraday_napi.dylib'
+        : process.platform === 'win32'
+          ? 'native-zig/zig-out/lib/faraday_napi.dll'
+          : 'native-zig/zig-out/lib/libfaraday_napi.so',
+    ],
   },
   rebuildConfig: {},
   makers: [new MakerMSIX({}), new MakerZIP({}, ['darwin']), new MakerRpm({}), new MakerDeb({})],

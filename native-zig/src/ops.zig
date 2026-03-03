@@ -1,8 +1,27 @@
 /// Filesystem operations — uses std.fs for cross-platform support.
+///
+/// All operations return data structures. Serialization to proto.Writer
+/// (for the elevated helper) or to JS values (for the N-API addon) is
+/// handled by the respective callers.
 const std = @import("std");
-const proto = @import("proto.zig");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
+
+// ── Result types ─────────────────────────────────────────────────────
+
+pub const EntryInfo = struct {
+    name: []const u8,
+    kind: []const u8, // "directory" or "file"
+    size: f64,
+    mtimeMs: f64,
+    mode: u32,
+    isSymbolicLink: bool,
+};
+
+pub const StatResult = struct {
+    size: f64,
+    mtimeMs: f64,
+};
 
 // ── File-descriptor table ────────────────────────────────────────────
 
@@ -25,7 +44,7 @@ pub const FdTable = struct {
         self.entries.deinit(self.allocator);
     }
 
-    fn add(self: *FdTable, file: std.fs.File) ![]const u8 {
+    pub fn add(self: *FdTable, file: std.fs.File) ![]const u8 {
         var buf: [32]u8 = undefined;
         const id = std.fmt.bufPrint(&buf, "fd-{d}", .{self.next_id}) catch unreachable;
         self.next_id += 1;
@@ -34,14 +53,14 @@ pub const FdTable = struct {
         return owned;
     }
 
-    fn get(self: *const FdTable, id: []const u8) ?std.fs.File {
+    pub fn get(self: *const FdTable, id: []const u8) ?std.fs.File {
         for (self.entries.items) |e| {
             if (std.mem.eql(u8, e.id, id)) return e.file;
         }
         return null;
     }
 
-    fn remove(self: *FdTable, id: []const u8) void {
+    pub fn remove(self: *FdTable, id: []const u8) void {
         for (self.entries.items, 0..) |e, i| {
             if (std.mem.eql(u8, e.id, id)) {
                 e.file.close();
@@ -55,19 +74,13 @@ pub const FdTable = struct {
 
 // ── Operations ───────────────────────────────────────────────────────
 
-pub fn entries(dir_path: []const u8, out: *proto.Writer) !void {
+pub fn entries(dir_path: []const u8, allocator: Allocator) !std.ArrayList(EntryInfo) {
     var dir = try std.fs.openDirAbsolute(dir_path, .{ .iterate = true });
     defer dir.close();
 
-    const count_pos = out.buf.items.len;
-    try out.u32_(0); // placeholder
-
-    var count: u32 = 0;
+    var list = std.ArrayList(EntryInfo).empty;
     var iter = dir.iterate();
     while (try iter.next()) |entry| {
-        const is_dir: u8 = if (entry.kind == .directory) 1 else 0;
-        const is_link: u8 = if (entry.kind == .sym_link) 1 else 0;
-
         var size: f64 = 0;
         var mtime_ms: f64 = 0;
         var mode: u32 = 0;
@@ -78,49 +91,50 @@ pub fn entries(dir_path: []const u8, out: *proto.Writer) !void {
             mode = if (comptime builtin.os.tag == .windows) 0 else @intCast(st.mode);
         } else |_| {}
 
-        try out.str_(entry.name);
-        try out.u8_(is_dir);
-        try out.f64_(size);
-        try out.f64_(mtime_ms);
-        try out.u32_(mode);
-        try out.u8_(is_link);
-        count += 1;
+        try list.append(allocator, .{
+            .name = try allocator.dupe(u8, entry.name),
+            .kind = if (entry.kind == .directory) "directory" else "file",
+            .size = size,
+            .mtimeMs = mtime_ms,
+            .mode = mode,
+            .isSymbolicLink = entry.kind == .sym_link,
+        });
     }
-
-    out.patchU32(count_pos, count);
+    return list;
 }
 
-pub fn stat(file_path: []const u8, out: *proto.Writer) !void {
+pub fn stat(file_path: []const u8) !StatResult {
     var f = try std.fs.openFileAbsolute(file_path, .{});
     defer f.close();
     const st = try f.stat();
-    try out.f64_(@floatFromInt(st.size));
-    try out.f64_(@as(f64, @floatFromInt(st.mtime)) / 1_000_000.0);
-}
-
-pub fn exists(file_path: []const u8, out: *proto.Writer) !void {
-    std.fs.accessAbsolute(file_path, .{}) catch {
-        try out.u8_(0);
-        return;
+    return .{
+        .size = @floatFromInt(st.size),
+        .mtimeMs = @as(f64, @floatFromInt(st.mtime)) / 1_000_000.0,
     };
-    try out.u8_(1);
 }
 
-pub fn open(file_path: []const u8, out: *proto.Writer, fdt: *FdTable) !void {
+pub fn exists(file_path: []const u8) bool {
+    std.fs.accessAbsolute(file_path, .{}) catch return false;
+    return true;
+}
+
+pub fn open(file_path: []const u8, fdt: *FdTable) ![]const u8 {
     const f = try std.fs.openFileAbsolute(file_path, .{});
     const id = fdt.add(f) catch |err| {
         f.close();
         return err;
     };
-    try out.str_(id);
+    return id;
 }
 
-pub fn read(fd_id: []const u8, offset: i64, length: usize, out: *proto.Writer, fdt: *const FdTable, allocator: Allocator) !void {
+pub fn read(fd_id: []const u8, offset: i64, length: usize, fdt: *const FdTable, allocator: Allocator) ![]u8 {
     const f = fdt.get(fd_id) orelse return error.InvalidHandle;
     const buf = try allocator.alloc(u8, length);
-    defer allocator.free(buf);
-    const n = try f.pread(buf, @intCast(offset));
-    try out.bytes(buf[0..n]);
+    const n = f.pread(buf, @intCast(offset)) catch |err| {
+        allocator.free(buf);
+        return err;
+    };
+    return buf[0..n];
 }
 
 pub fn close(fd_id: []const u8, fdt: *FdTable) void {

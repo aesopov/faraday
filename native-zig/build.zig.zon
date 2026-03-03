@@ -1,0 +1,12 @@
+.{
+    .name = .native_zig,
+    .version = "0.15.2",
+    .dependencies = .{
+        .napigen = .{
+            .url = "git+https://github.com/cztomsik/napigen?ref=main#bc2c8259d95be774847e60fce9bfc203ab623b30",
+            .hash = "napigen-0.1.0-YpiIumJ9AAA4yVKISHKfN_2H0u7-su18jRHSSq_UUTNN",
+        },
+    },
+    .paths = .{""},
+    .fingerprint = 0x70c09f88a49e975a,
+}

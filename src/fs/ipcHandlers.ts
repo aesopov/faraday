@@ -1,15 +1,25 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import { launchElevated, type ElevatedChild } from './elevate';
 import { RawFs } from './types';
-import { FsOps } from './fsOps';
+import { NativeFs } from './native';
 import { FsProxy } from './fsProxy';
 import type { FsChangeEvent } from '../types';
 
 // ── Per-webContents resource tracking ────────────────────────────────
 
-const opsByContents = new Map<number, FsOps>();
+const opsByContents = new Map<number, NativeFs>();
+const localFdsByContents = new Map<number, Set<string>>();
 const proxyFdsByContents = new Map<number, Set<string>>();
 const proxyWatchesByContents = new Map<number, Set<string>>();
+
+function trackLocalFd(contentsId: number, fdId: string): void {
+  let set = localFdsByContents.get(contentsId);
+  if (!set) {
+    set = new Set();
+    localFdsByContents.set(contentsId, set);
+  }
+  set.add(fdId);
+}
 
 function trackProxyFd(contentsId: number, fdId: string): void {
   let set = proxyFdsByContents.get(contentsId);
@@ -29,10 +39,10 @@ function trackProxyWatch(contentsId: number, watchId: string): void {
   set.add(watchId);
 }
 
-function getOps(contentsId: number, sender: Electron.WebContents): FsOps {
+function getOps(contentsId: number, sender: Electron.WebContents): NativeFs {
   let ops = opsByContents.get(contentsId);
   if (!ops) {
-    ops = new FsOps((event) => {
+    ops = new NativeFs((event) => {
       if (!sender.isDestroyed()) {
         sender.send('fsa:change', event);
       }
@@ -118,6 +128,16 @@ export function cleanupContents(contentsId: number): void {
     opsByContents.delete(contentsId);
   }
 
+  // Clean up local fds tracked by the native addon's global FdTable
+  const localFds = localFdsByContents.get(contentsId);
+  if (localFds) {
+    const anyOps = opsByContents.values().next().value;
+    if (anyOps) {
+      for (const fdId of localFds) anyOps.close(fdId).catch(() => {});
+    }
+  }
+  localFdsByContents.delete(contentsId);
+
   const p = proxy;
   if (p?.isAlive) {
     const fds = proxyFdsByContents.get(contentsId);
@@ -152,7 +172,9 @@ export function registerFsHandlers(): void {
     withErrorHandling(async (event, filePath: string) => {
       const ops = getOps(event.sender.id, event.sender);
       try {
-        return await ops.open(filePath);
+        const fdId = await ops.open(filePath);
+        trackLocalFd(event.sender.id, fdId);
+        return fdId;
       } catch (err) {
         if (!isElevatable(err)) throw err;
         const p = await getProxy();
@@ -187,6 +209,7 @@ export function registerFsHandlers(): void {
         if (!p?.isAlive) return;
         return p.close(fdId);
       }
+      localFdsByContents.get(event.sender.id)?.delete(fdId);
       const ops = getOps(event.sender.id, event.sender);
       return ops.close(fdId);
     }),
