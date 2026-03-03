@@ -1,7 +1,7 @@
 {
   "name": "faraday",
   "productName": "faraday",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "My Electron application description",
   "main": ".vite/build/main.js",
   "private": true,
