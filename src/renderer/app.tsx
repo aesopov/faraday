@@ -7,6 +7,7 @@ import { detectLang } from '../langDetect';
 import { actionQueue } from './actionQueue';
 import { FileList } from './FileList';
 import { FileViewer } from './FileViewer';
+import { ImageViewer, isImageFile } from './ImageViewer';
 import { DirectoryHandle, FileSystemObserver, type FileSystemChangeRecord, type HandleMeta } from './fsa';
 import { createPanelResolver, invalidateFssCache, syncLayers } from './fss';
 import { basename, dirname, join } from './path';
@@ -324,12 +325,21 @@ export function App() {
         </div>
       </div>
       {viewerFile && (
-        <FileViewer
-          filePath={viewerFile.path}
-          fileName={viewerFile.name}
-          fileSize={viewerFile.size}
-          onClose={() => setViewerFile(null)}
-        />
+        isImageFile(viewerFile.name) ? (
+          <ImageViewer
+            filePath={viewerFile.path}
+            fileName={viewerFile.name}
+            fileSize={viewerFile.size}
+            onClose={() => setViewerFile(null)}
+          />
+        ) : (
+          <FileViewer
+            filePath={viewerFile.path}
+            fileName={viewerFile.name}
+            fileSize={viewerFile.size}
+            onClose={() => setViewerFile(null)}
+          />
+        )
       )}
     </div>
   );

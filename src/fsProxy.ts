@@ -1,15 +1,27 @@
 import type net from 'node:net';
 import type { FsChangeEvent, FsChangeType } from './types';
 import {
-  MSG_RESPONSE, MSG_ERROR, MSG_EVENT, MSG_REQUEST,
-  METHOD_ENTRIES, METHOD_STAT, METHOD_EXISTS, METHOD_READFILE,
-  METHOD_OPEN, METHOD_READ, METHOD_CLOSE, METHOD_WATCH, METHOD_UNWATCH,
-  EVT_TYPES, BufReader, BufWriter,
+  MSG_RESPONSE,
+  MSG_ERROR,
+  MSG_EVENT,
+  MSG_REQUEST,
+  METHOD_ENTRIES,
+  METHOD_STAT,
+  METHOD_EXISTS,
+  METHOD_OPEN,
+  METHOD_READ,
+  METHOD_CLOSE,
+  METHOD_WATCH,
+  METHOD_UNWATCH,
+  EVT_TYPES,
+  BufReader,
+  BufWriter,
 } from './protocol';
+import { FsaRawEntry, RawFs } from './fs/types';
 
 type Pending = { resolve: (payload: Buffer) => void; reject: (e: Error) => void };
 
-export class FsProxy {
+export class FsProxy implements RawFs {
   private nextId = 0;
   private pending = new Map<number, Pending>();
   private buf = Buffer.alloc(0);
@@ -105,7 +117,7 @@ export class FsProxy {
     });
   }
 
-  async entries(dirPath: string): Promise<unknown> {
+  async entries(dirPath: string): Promise<FsaRawEntry[]> {
     const payload = await this.send(METHOD_ENTRIES, new BufWriter().str(dirPath).build());
     const r = new BufReader(payload);
     const count = r.u32();
@@ -113,7 +125,7 @@ export class FsProxy {
     for (let i = 0; i < count; i++) {
       entries.push({
         name: r.str(),
-        kind: r.u8() === 1 ? 'directory' : 'file',
+        kind: r.u8() === 1 ? ('directory' as const) : ('file' as const),
         size: r.f64(),
         mtimeMs: r.f64(),
         mode: r.u32(),
@@ -123,19 +135,13 @@ export class FsProxy {
     return entries;
   }
 
-  async readFile(filePath: string): Promise<unknown> {
-    const payload = await this.send(METHOD_READFILE, new BufWriter().str(filePath).build());
-    const r = new BufReader(payload);
-    return r.bytes().toString('utf-8');
-  }
-
-  async stat(filePath: string): Promise<unknown> {
+  async stat(filePath: string): Promise<{ size: number; mtimeMs: number }> {
     const payload = await this.send(METHOD_STAT, new BufWriter().str(filePath).build());
     const r = new BufReader(payload);
     return { size: r.f64(), mtimeMs: r.f64() };
   }
 
-  async exists(filePath: string): Promise<unknown> {
+  async exists(filePath: string): Promise<boolean> {
     const payload = await this.send(METHOD_EXISTS, new BufWriter().str(filePath).build());
     const r = new BufReader(payload);
     return r.u8() !== 0;
@@ -159,7 +165,7 @@ export class FsProxy {
     await this.send(METHOD_CLOSE, new BufWriter().str(remoteFdId).build());
   }
 
-  async watch(watchId: string, dirPath: string): Promise<unknown> {
+  async watch(watchId: string, dirPath: string): Promise<{ ok: boolean }> {
     const payload = await this.send(METHOD_WATCH, new BufWriter().str(watchId).str(dirPath).build());
     const r = new BufReader(payload);
     return { ok: r.u8() !== 0 };

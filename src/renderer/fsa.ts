@@ -1,4 +1,5 @@
-import type { FsaRawEntry, FsChangeEvent, FsChangeType } from '../types';
+import { FsaRawEntry } from 'src/fs/types';
+import type { FsChangeEvent, FsChangeType } from '../types';
 import { join } from './path';
 
 export interface HandleMeta {
@@ -27,7 +28,8 @@ const CHUNK_SIZE = 65536; // 64 KB
 function lazyReadMethods(fd: string, offset: number, length: number) {
   return {
     async arrayBuffer(): Promise<ArrayBuffer> {
-      return handleResponse(await window.electron.fsa.read(fd, offset, length));
+      const buf = handleResponse(await window.electron.fsa.read(fd, offset, length));
+      return buf as unknown as ArrayBuffer;
     },
     async text(): Promise<string> {
       const buf = handleResponse(await window.electron.fsa.read(fd, offset, length));

@@ -1,11 +1,12 @@
 import { watch, type FSWatcher } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { FsChangeEvent, FsChangeType, FsaRawEntry } from './types';
+import type { FsChangeEvent, FsChangeType } from './types';
+import { FsaRawEntry, RawFs } from './fs/types';
 
 type NodeFileHandle = Awaited<ReturnType<typeof fs.open>>;
 
-export class FsOps {
+export class FsOps implements RawFs {
   private fds = new Map<string, NodeFileHandle>();
   private watchers = new Map<string, FSWatcher>();
   private nextFdId = 0;
@@ -33,10 +34,6 @@ export class FsOps {
         return { name: d.name, kind: d.isDirectory() ? 'directory' : 'file', size, mtimeMs, mode, isSymbolicLink } as FsaRawEntry;
       }),
     );
-  }
-
-  async readFile(filePath: string): Promise<string> {
-    return fs.readFile(filePath, 'utf-8');
   }
 
   async stat(filePath: string): Promise<{ size: number; mtimeMs: number }> {
@@ -130,16 +127,24 @@ export class FsOps {
 
   async dispatch(method: string, args: unknown[]): Promise<unknown> {
     switch (method) {
-      case 'entries':   return this.entries(args[0] as string);
-      case 'readFile':  return this.readFile(args[0] as string);
-      case 'stat':      return this.stat(args[0] as string);
-      case 'exists':    return this.exists(args[0] as string);
-      case 'open':      return this.open(args[0] as string);
-      case 'read':      return this.read(args[0] as string, args[1] as number, args[2] as number);
-      case 'close':     return this.close(args[0] as string);
-      case 'watch':     return this.watch(args[0] as string, args[1] as string);
-      case 'unwatch':   return this.unwatch(args[0] as string);
-      default: throw new Error(`Unknown method: ${method}`);
+      case 'entries':
+        return this.entries(args[0] as string);
+      case 'stat':
+        return this.stat(args[0] as string);
+      case 'exists':
+        return this.exists(args[0] as string);
+      case 'open':
+        return this.open(args[0] as string);
+      case 'read':
+        return this.read(args[0] as string, args[1] as number, args[2] as number);
+      case 'close':
+        return this.close(args[0] as string);
+      case 'watch':
+        return this.watch(args[0] as string, args[1] as string);
+      case 'unwatch':
+        return this.unwatch(args[0] as string);
+      default:
+        throw new Error(`Unknown method: ${method}`);
     }
   }
 }

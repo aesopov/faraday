@@ -17,16 +17,15 @@ pub const MsgType = enum(u8) {
 };
 
 pub const Method = enum(u8) {
-    entries = 0x01,
-    stat = 0x02,
-    exists = 0x03,
-    read_file = 0x04,
+    ping = 0x01,
+    entries = 0x02,
+    stat = 0x03,
+    exists = 0x04,
     open = 0x05,
     read = 0x06,
     close = 0x07,
     watch = 0x08,
     unwatch = 0x09,
-    ping = 0x0a,
     _,
 };
 

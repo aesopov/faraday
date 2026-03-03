@@ -16,7 +16,7 @@ Faraday is an Electron + React + TypeScript file manager. It uses Electron Forge
 
 ### Process Boundaries
 
-- **Main process** (`src/main.ts`): Exposes filesystem operations via IPC handlers prefixed `fsa:` (entries, readFile, stat, readSlice) and utility handlers prefixed `utils:`.
+- **Main process** (`src/main.ts`): Exposes filesystem operations via IPC handlers prefixed `fsa:` (entries, stat, readSlice) and utility handlers prefixed `utils:`.
 - **Preload** (`src/preload.ts`): Bridges IPC to `window.electron` using `contextBridge`. The shape is defined by the `ElectronBridge` interface in `src/types.ts`.
 - **Renderer** (`src/renderer/`): React app mounted on `#app`. All filesystem access goes through `window.electron.fsa.*` — never use Node.js `fs` in the renderer.
 

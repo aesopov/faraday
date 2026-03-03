@@ -2,10 +2,11 @@ import { app, BrowserWindow, ipcMain, nativeTheme } from 'electron';
 import started from 'electron-squirrel-startup';
 import os from 'node:os';
 import path from 'node:path';
+import { launchElevated, type ElevatedChild } from './elevate';
+import { RawFs } from './fs/types';
 import { FsOps } from './fsOps';
 import { FsProxy } from './fsProxy';
-import { launchElevated, type ElevatedChild } from './elevate';
-import type { FsaRawEntry, FsChangeEvent } from './types';
+import type { FsChangeEvent } from './types';
 
 if (started) {
   app.quit();
@@ -90,69 +91,27 @@ function withErrorHandling<A extends unknown[], T>(fn: (...args: A) => Promise<T
 }
 
 // Escalation wrapper: try local first, on EACCES/EPERM retry via elevated proxy
-function withEscalation<A extends unknown[], R>(localFn: (ops: FsOps, ...args: A) => Promise<R>, proxyFn: (proxy: FsProxy, ...args: A) => Promise<R>) {
+function withEscalation<A extends unknown[], R>(fn: (ops: RawFs, ...args: A) => Promise<R>) {
   return async (event: Electron.IpcMainInvokeEvent, ...args: A): Promise<R> => {
     const ops = getOps(event.sender.id, event.sender);
     try {
-      return await localFn(ops, ...args);
+      return await fn(ops, ...args);
     } catch (err) {
       if (!isElevatable(err)) throw err;
       const p = await getProxy();
-      return proxyFn(p, ...args);
+      return fn(p, ...args);
     }
   };
 }
 
 // IPC handlers — FSA-compatible, with automatic escalation
-ipcMain.handle(
-  'fsa:entries',
-  withErrorHandling(
-    withEscalation(
-      (ops, dirPath: string) => ops.entries(dirPath),
-      (p, dirPath: string) => {
-        return p.entries(dirPath) as Promise<FsaRawEntry[]>;
-      },
-    ),
-  ),
-);
+ipcMain.handle('fsa:entries', withErrorHandling(withEscalation((fs, dirPath: string) => fs.entries(dirPath))));
 
-ipcMain.handle(
-  'fsa:readFile',
-  withEscalation(
-    (ops, filePath: string) => ops.readFile(filePath),
-    (p, filePath: string) => p.readFile(filePath) as Promise<string>,
-  ),
-);
+ipcMain.handle('fsa:stat', withErrorHandling(withEscalation((fs, filePath: string) => fs.stat(filePath))));
 
-ipcMain.handle(
-  'fsa:stat',
-  withErrorHandling(
-    withEscalation(
-      (ops, filePath: string) => ops.stat(filePath),
-      (p, filePath: string) => p.stat(filePath) as Promise<{ size: number; mtimeMs: number }>,
-    ),
-  ),
-);
+ipcMain.handle('fsa:exists', withErrorHandling(withEscalation((fs, filePath: string) => fs.exists(filePath))));
 
-ipcMain.handle(
-  'fsa:exists',
-  withErrorHandling(
-    withEscalation(
-      (ops, filePath: string) => ops.exists(filePath),
-      (p, filePath: string) => p.exists(filePath) as Promise<boolean>,
-    ),
-  ),
-);
-
-ipcMain.handle(
-  'fsa:open',
-  withErrorHandling(
-    withEscalation(
-      (ops, filePath: string) => ops.open(filePath),
-      (p, filePath: string) => p.open(filePath),
-    ),
-  ),
-);
+ipcMain.handle('fsa:open', withErrorHandling(withEscalation((fs, filePath: string) => fs.open(filePath))));
 
 ipcMain.handle(
   'fsa:read',
@@ -182,15 +141,7 @@ ipcMain.handle(
   }),
 );
 
-ipcMain.handle(
-  'fsa:watch',
-  withErrorHandling(
-    withEscalation(
-      (ops, watchId: string, dirPath: string) => ops.watch(watchId, dirPath),
-      (p, watchId: string, dirPath: string) => p.watch(watchId, dirPath) as Promise<{ ok: boolean }>,
-    ),
-  ),
-);
+ipcMain.handle('fsa:watch', withErrorHandling(withEscalation((fs, watchId: string, dirPath: string) => fs.watch(watchId, dirPath))));
 
 ipcMain.handle(
   'fsa:unwatch',

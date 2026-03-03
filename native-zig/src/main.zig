@@ -107,7 +107,6 @@ fn dispatch(
         .entries => try ops.entries(try reader.str(), out),
         .stat => try ops.stat(try reader.str(), out),
         .exists => try ops.exists(try reader.str(), out),
-        .read_file => try ops.readFile(try reader.str(), out, allocator),
         .open => try ops.open(try reader.str(), out, fdt),
         .read => {
             const fd_id = try reader.str();
@@ -189,11 +188,13 @@ pub fn main() !void {
     // Signal handling (Unix)
     if (comptime builtin.os.tag != .windows) {
         const handler = posix.Sigaction{
-            .handler = .{ .handler = struct {
-                fn h(_: c_int) callconv(.c) void {
-                    // will cause poll/read to fail with EINTR
-                }
-            }.h },
+            .handler = .{
+                .handler = struct {
+                    fn h(_: c_int) callconv(.c) void {
+                        // will cause poll/read to fail with EINTR
+                    }
+                }.h,
+            },
             .mask = std.mem.zeroes(posix.sigset_t),
             .flags = 0,
         };

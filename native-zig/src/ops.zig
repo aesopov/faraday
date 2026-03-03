@@ -106,16 +106,6 @@ pub fn exists(file_path: []const u8, out: *proto.Writer) !void {
     try out.u8_(1);
 }
 
-pub fn readFile(file_path: []const u8, out: *proto.Writer, allocator: Allocator) !void {
-    var f = try std.fs.openFileAbsolute(file_path, .{});
-    defer f.close();
-    const st = try f.stat();
-    const data = try allocator.alloc(u8, st.size);
-    defer allocator.free(data);
-    const n = try f.readAll(data);
-    try out.bytes(data[0..n]);
-}
-
 pub fn open(file_path: []const u8, out: *proto.Writer, fdt: *FdTable) !void {
     const f = try std.fs.openFileAbsolute(file_path, .{});
     const id = fdt.add(f) catch |err| {
