@@ -281,44 +281,53 @@ body {
 
 .file-viewer-body {
   flex: 1;
-  overflow-y: auto;
+  overflow: hidden;
+  display: flex;
+  min-height: 0;
+}
+
+.file-viewer-text {
+  flex: 1;
+  overflow: hidden;
+  outline: none;
   font-family: monospace;
   font-size: 13px;
   line-height: 20px;
+  position: relative;
 }
 
 .file-viewer-line {
-  display: flex;
   height: 20px;
-  padding: 0 12px 0 0;
+  padding: 0 12px;
+  white-space: pre;
+  tab-size: 4;
+  overflow: hidden;
 }
 
 .file-viewer-line:hover {
   background: var(--entry-hover);
 }
 
-.file-viewer-gutter {
-  width: 60px;
-  text-align: right;
-  padding-right: 12px;
-  color: var(--fg-muted);
-  user-select: none;
+.file-viewer-scrollbar {
+  width: 14px;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border);
+  position: relative;
   flex-shrink: 0;
 }
 
-.file-viewer-content {
-  white-space: pre;
-  tab-size: 4;
-  flex: 1;
-  min-width: 0;
+.file-viewer-thumb {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  background: var(--fg-muted);
+  border-radius: 3px;
+  min-height: 20px;
+  cursor: default;
 }
 
-.file-viewer-scanning {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--fg-muted);
+.file-viewer-thumb:hover {
+  background: var(--fg-secondary);
 }
 
 .image-viewer-body {
