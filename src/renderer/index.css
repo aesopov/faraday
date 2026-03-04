@@ -123,11 +123,65 @@ body {
   color: var(--fg-muted);
 }
 
-.error {
-  padding: 6px 12px;
+.modal-dialog {
+  width: 400px;
+  max-width: 90vw;
+  margin: auto;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border-active);
+  border-radius: 4px;
+  padding: 0;
+  overflow: hidden;
+}
+
+.modal-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.modal-dialog-header {
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--fg-secondary);
+  user-select: none;
+}
+
+.modal-dialog.error .modal-dialog-header {
   background: var(--error-bg);
   color: var(--error-fg);
+}
+
+.modal-dialog-body {
+  padding: 16px 12px;
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.modal-dialog-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.modal-dialog-buttons button {
+  padding: 4px 16px;
+  border: 1px solid var(--border-active);
+  border-radius: 3px;
+  background: var(--bg-secondary);
+  color: var(--fg);
   font-size: 12px;
+  cursor: pointer;
+}
+
+.modal-dialog-buttons button:focus {
+  outline: 2px solid var(--border-active);
+  outline-offset: 1px;
 }
 
 .file-list {

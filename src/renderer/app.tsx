@@ -8,6 +8,7 @@ import { actionQueue } from './actionQueue';
 import { FileList } from './FileList';
 import { FileViewer } from './FileViewer';
 import { ImageViewer, isImageFile } from './ImageViewer';
+import { ModalDialog, type ModalDialogProps } from './ModalDialog';
 import { DirectoryHandle, FileSystemObserver, type FileSystemChangeRecord, type HandleMeta } from './fsa';
 import { createPanelResolver, invalidateFssCache, syncLayers } from './fss';
 import { basename, dirname, join } from './path';
@@ -56,10 +57,9 @@ interface PanelState {
   currentPath: string;
   parentNode?: FsNode;
   entries: FsNode[];
-  error: string | null;
 }
 
-const emptyPanel: PanelState = { currentPath: '', parentNode: undefined, entries: [], error: null };
+const emptyPanel: PanelState = { currentPath: '', parentNode: undefined, entries: [] };
 
 async function findExistingParent(startPath: string): Promise<string> {
   let cur = dirname(startPath);
@@ -82,7 +82,7 @@ function getAncestors(dirPath: string): string[] {
   return ancestors;
 }
 
-function usePanel(theme: ThemeKind) {
+function usePanel(theme: ThemeKind, showError: (message: string) => void) {
   const [state, setState] = useState<PanelState>(emptyPanel);
   const [navigating, setNavigating] = useState(false);
   const navTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -99,6 +99,9 @@ function usePanel(theme: ThemeKind) {
   useEffect(() => {
     resolverRef.current!.setTheme(theme);
   }, [theme]);
+
+  const showErrorRef = useRef(showError);
+  showErrorRef.current = showError;
 
   const setupWatches = useCallback((dirPath: string) => {
     const observer = observerRef.current!;
@@ -129,7 +132,7 @@ function usePanel(theme: ThemeKind) {
           nodes.push(handleToFsNode(handle, path, parent));
         }
         if (abort.signal.aborted) return;
-        setState({ currentPath: path, parentNode: parent, entries: nodes, error: null });
+        setState({ currentPath: path, parentNode: parent, entries: nodes });
         setupWatches(path);
       })();
       // Suppress unhandled rejection from orphaned work after abort
@@ -142,7 +145,7 @@ function usePanel(theme: ThemeKind) {
       ]);
     } catch (err) {
       if (!abort.signal.aborted) {
-        setState((prev) => ({ ...prev, error: `Failed to read directory: ${err}` }));
+        showErrorRef.current(`Failed to read directory: ${err}`);
       }
     } finally {
       clearTimeout(navTimerRef.current!);
@@ -250,8 +253,12 @@ type PanelSide = 'left' | 'right';
 
 export function App() {
   const [theme, setTheme] = useState<ThemeKind>('dark');
-  const left = usePanel(theme);
-  const right = usePanel(theme);
+  const [dialog, setDialog] = useState<Omit<ModalDialogProps, 'onClose'> | null>(null);
+  const showError = useCallback((message: string) => {
+    setDialog({ title: 'Error', message, variant: 'error' });
+  }, []);
+  const left = usePanel(theme, showError);
+  const right = usePanel(theme, showError);
   const [activePanel, setActivePanel] = useState<PanelSide>('left');
   const [viewerFile, setViewerFile] = useState<{ path: string; name: string; size: number } | null>(null);
 
@@ -299,7 +306,6 @@ export function App() {
       <div className="panels">
         <div className={`panel ${activePanel === 'left' ? 'active' : ''}`} onClick={() => setActivePanel('left')}>
           {left.navigating && <div className="panel-progress" />}
-          {left.error && <div className="error">{left.error}</div>}
           <FileList
             currentPath={left.currentPath}
             parentNode={left.parentNode}
@@ -312,7 +318,6 @@ export function App() {
         </div>
         <div className={`panel ${activePanel === 'right' ? 'active' : ''}`} onClick={() => setActivePanel('right')}>
           {right.navigating && <div className="panel-progress" />}
-          {right.error && <div className="error">{right.error}</div>}
           <FileList
             currentPath={right.currentPath}
             parentNode={right.parentNode}
@@ -341,6 +346,7 @@ export function App() {
           />
         )
       )}
+      {dialog && <ModalDialog {...dialog} onClose={() => setDialog(null)} />}
     </div>
   );
 }
