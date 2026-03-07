@@ -60,7 +60,7 @@ export const FileList = memo(function FileList({ currentPath, parentNode, entrie
   const [activeIndex, setActiveIndex] = useState(0);
   const [topmostIndex, setTopmostIndex] = useState(0);
   const [maxItemsPerColumn, setMaxItemsPerColumn] = useState(1);
-  const [, setIconsVersion] = useState(0);
+  const [iconsVersion, setIconsVersion] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const prevPathRef = useRef(currentPath);
   const { width } = useElementSize(rootRef);
@@ -309,7 +309,7 @@ export const FileList = memo(function FileList({ currentPath, parentNode, entrie
         </div>
       );
     },
-    [activeIndex, navigateToEntry],
+    [activeIndex, navigateToEntry, iconsVersion],
   );
 
   // Footer info
