@@ -118,8 +118,12 @@ export const FileList = memo(function FileList({ currentPath, parentNode, entrie
 
   useEffect(() => {
     let cancelled = false;
-    loadIcons(neededIcons).then(() => { if (!cancelled) setIconsVersion((n) => n + 1); });
-    return () => { cancelled = true; };
+    loadIcons(neededIcons).then(() => {
+      if (!cancelled) setIconsVersion((n) => n + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [neededIcons]);
 
   // When path changes, select child we came from (navigating up) or reset to 0
@@ -136,7 +140,11 @@ export const FileList = memo(function FileList({ currentPath, parentNode, entrie
       const childName = remainder.split('/')[0];
       if (childName) {
         const idx = displayEntries.findIndex((d) => d.entry.name === childName);
-        if (idx >= 0) { setActiveIndex(idx); setTopmostIndex(0); return; }
+        if (idx >= 0) {
+          setActiveIndex(idx);
+          setTopmostIndex(0);
+          return;
+        }
       }
     }
     setActiveIndex(0);
@@ -178,27 +186,19 @@ export const FileList = memo(function FileList({ currentPath, parentNode, entrie
       switch (e.key) {
         case 'ArrowUp':
           e.preventDefault();
-          actionQueue.enqueue(() =>
-            setActiveIndex((i) => Math.max(0, i - 1)),
-          );
+          actionQueue.enqueue(() => setActiveIndex((i) => Math.max(0, i - 1)));
           break;
         case 'ArrowDown':
           e.preventDefault();
-          actionQueue.enqueue(() =>
-            setActiveIndex((i) => Math.min(displayEntriesRef.current.length - 1, i + 1)),
-          );
+          actionQueue.enqueue(() => setActiveIndex((i) => Math.min(displayEntriesRef.current.length - 1, i + 1)));
           break;
         case 'ArrowLeft':
           e.preventDefault();
-          actionQueue.enqueue(() =>
-            setActiveIndex((i) => Math.max(0, i - maxItemsPerColumnRef.current)),
-          );
+          actionQueue.enqueue(() => setActiveIndex((i) => Math.max(0, i - maxItemsPerColumnRef.current)));
           break;
         case 'ArrowRight':
           e.preventDefault();
-          actionQueue.enqueue(() =>
-            setActiveIndex((i) => Math.min(displayEntriesRef.current.length - 1, i + maxItemsPerColumnRef.current)),
-          );
+          actionQueue.enqueue(() => setActiveIndex((i) => Math.min(displayEntriesRef.current.length - 1, i + maxItemsPerColumnRef.current)));
           break;
         case 'Home':
           e.preventDefault();
@@ -210,15 +210,11 @@ export const FileList = memo(function FileList({ currentPath, parentNode, entrie
           break;
         case 'PageUp':
           e.preventDefault();
-          actionQueue.enqueue(() =>
-            setActiveIndex((i) => Math.max(0, i - displayedItemsRef.current + 1)),
-          );
+          actionQueue.enqueue(() => setActiveIndex((i) => Math.max(0, i - displayedItemsRef.current + 1)));
           break;
         case 'PageDown':
           e.preventDefault();
-          actionQueue.enqueue(() =>
-            setActiveIndex((i) => Math.min(displayEntriesRef.current.length - 1, i + displayedItemsRef.current - 1)),
-          );
+          actionQueue.enqueue(() => setActiveIndex((i) => Math.min(displayEntriesRef.current.length - 1, i + displayedItemsRef.current - 1)));
           break;
         case 'Enter':
           e.preventDefault();
@@ -261,14 +257,11 @@ export const FileList = memo(function FileList({ currentPath, parentNode, entrie
     setTopmostIndex((t) => Math.max(0, Math.min(t, displayEntriesRef.current.length - count * columnCountRef.current)));
   }, []);
 
-  const handlePosChange: ColumnsScrollerProps['onPosChange'] = useCallback(
-    (_topmost: number, active: number) => {
-      actionQueue.enqueue(() => {
-        setActiveIndex(clamp(active, 0, displayEntriesRef.current.length - 1));
-      });
-    },
-    [],
-  );
+  const handlePosChange: ColumnsScrollerProps['onPosChange'] = useCallback((_topmost: number, active: number) => {
+    actionQueue.enqueue(() => {
+      setActiveIndex(clamp(active, 0, displayEntriesRef.current.length - 1));
+    });
+  }, []);
 
   const lastClickTime = useRef(0);
 
@@ -297,15 +290,11 @@ export const FileList = memo(function FileList({ currentPath, parentNode, entrie
             }
           }}
         >
-          <span className="entry-icon">
-            {iconUrl && <img src={iconUrl} width={16} height={16} alt="" />}
-          </span>
+          <span className="entry-icon">{iconUrl && <img src={iconUrl} width={16} height={16} alt="" />}</span>
           <span className="entry-name" style={style.color ? { color: style.color } : undefined}>
             {entry.name}
           </span>
-          {'size' in entry.meta && entry.type === 'file' && (
-            <span className="entry-size">{formatSize(entry.meta.size)}</span>
-          )}
+          {'size' in entry.meta && entry.type === 'file' && <span className="entry-size">{formatSize(entry.meta.size)}</span>}
         </div>
       );
     },
