@@ -189,22 +189,32 @@ const KqueueImpl = struct {
 
 // ── Linux: inotify ───────────────────────────────────────────────────
 
+/// Safe wrapper: calls inotify_rm_watch via raw syscall so that EINVAL
+/// (which the kernel returns when a watch is auto-removed after
+/// IN_DELETE_SELF / IN_MOVE_SELF) is silently ignored instead of
+/// triggering the `unreachable` in posix.inotify_rm_watch.
+fn inotifyRmWatchSafe(ifd: posix.fd_t, wd: i32) void {
+    _ = std.os.linux.inotify_rm_watch(ifd, wd);
+}
+
 const InotifyImpl = struct {
     const Handle = i32; // inotify watch descriptor
 
     ifd: posix.fd_t,
+    allocator: Allocator,
     watches: std.ArrayList(Watcher.WatchEntry) = .empty,
     parent_dead: bool = false,
 
-    fn init(_: Allocator) !InotifyImpl {
+    fn init(allocator: Allocator) !InotifyImpl {
         return .{
             .ifd = try posix.inotify_init1(std.os.linux.IN.NONBLOCK | std.os.linux.IN.CLOEXEC),
+            .allocator = allocator,
         };
     }
 
     fn deinit(self: *InotifyImpl, allocator: Allocator) void {
         for (self.watches.items) |e| {
-            posix.inotify_rm_watch(self.ifd, e.handle);
+            inotifyRmWatchSafe(self.ifd, e.handle);
             allocator.free(e.id);
             allocator.free(e.path);
         }
@@ -231,7 +241,7 @@ const InotifyImpl = struct {
     fn remove(self: *InotifyImpl, allocator: Allocator, id: []const u8) void {
         for (self.watches.items, 0..) |e, i| {
             if (std.mem.eql(u8, e.id, id)) {
-                posix.inotify_rm_watch(self.ifd, e.handle);
+                inotifyRmWatchSafe(self.ifd, e.handle);
                 allocator.free(e.id);
                 allocator.free(e.path);
                 _ = self.watches.orderedRemove(i);
@@ -259,9 +269,13 @@ const InotifyImpl = struct {
             };
             const name: ?[]const u8 = ev.getName();
             const mask = ev.mask;
-            if (mask & (std.os.linux.IN.DELETE_SELF | std.os.linux.IN.MOVE_SELF) != 0)
-                cb(wid, "errored", null)
-            else if (mask & (std.os.linux.IN.CREATE | std.os.linux.IN.MOVED_TO) != 0)
+            if (mask & (std.os.linux.IN.DELETE_SELF | std.os.linux.IN.MOVE_SELF) != 0) {
+                // Kernel auto-removes the wd here; remove from our list so
+                // a subsequent unwatch() doesn't call inotify_rm_watch on a
+                // stale (already-removed) descriptor.
+                self.removeByWd(ev.wd);
+                cb(wid, "errored", null);
+            } else if (mask & (std.os.linux.IN.CREATE | std.os.linux.IN.MOVED_TO) != 0)
                 cb(wid, "appeared", name)
             else if (mask & (std.os.linux.IN.DELETE | std.os.linux.IN.MOVED_FROM) != 0)
                 cb(wid, "disappeared", name)
@@ -270,6 +284,17 @@ const InotifyImpl = struct {
             else
                 cb(wid, "unknown", name);
             off += @sizeOf(std.os.linux.inotify_event) + ev.len;
+        }
+    }
+
+    fn removeByWd(self: *InotifyImpl, wd: i32) void {
+        for (self.watches.items, 0..) |e, i| {
+            if (e.handle == wd) {
+                self.allocator.free(e.id);
+                self.allocator.free(e.path);
+                _ = self.watches.orderedRemove(i);
+                return;
+            }
         }
     }
 
