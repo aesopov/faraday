@@ -1,4 +1,4 @@
-/// faraday-helper — lightweight elevated filesystem helper (Zig implementation).
+/// frdye — lightweight elevated filesystem helper (Zig implementation).
 ///
 /// Speaks a length-prefixed binary protocol over a Unix domain socket (macOS/Linux)
 /// or a named pipe (Windows).
@@ -230,7 +230,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const args = parseArgs(allocator) catch {
-        std.debug.print("Usage: faraday-helper --socket <path> --token <hex>\n", .{});
+        std.debug.print("Usage: frdye --socket <path> --token <hex>\n", .{});
         std.process.exit(1);
     };
 

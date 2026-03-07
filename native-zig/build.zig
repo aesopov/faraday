@@ -7,7 +7,7 @@ pub fn build(b: *std.Build) void {
 
     // Elevated helper executable (standalone binary)
     const exe = b.addExecutable(.{
-        .name = "faraday-helper",
+        .name = "frdye",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/main.zig"),
             .target = target,

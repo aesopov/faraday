@@ -12,10 +12,8 @@ const config: ForgeConfig = {
     asar: true,
     extraResource: [
       'assets',
-      process.platform === 'win32' ? 'native-zig/zig-out/bin/faraday-helper.exe' : 'native-zig/zig-out/bin/faraday-helper',
-      process.platform === 'darwin'
-        ? 'native-zig/zig-out/lib/libfaraday_napi.dylib'
-        : 'native-zig/zig-out/lib/faraday_napi.node',
+      process.platform === 'win32' ? 'native-zig/zig-out/bin/frdye.exe' : 'native-zig/zig-out/bin/frdye',
+      process.platform === 'darwin' ? 'native-zig/zig-out/lib/libfaraday_napi.dylib' : 'native-zig/zig-out/lib/faraday_napi.node',
     ],
   },
   rebuildConfig: {},

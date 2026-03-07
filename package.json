@@ -6,12 +6,12 @@
   "main": ".vite/build/main.js",
   "private": true,
   "scripts": {
-    "dev": "electron-forge start",
-    "package": "electron-forge package",
+    "dev": "npm run build:frdye && npm run build:napi && electron-forge start",
+    "package": "npm run build:frdye && npm run build:napi && electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint",
-    "build:helper-zig": "cd native-zig && zig build -Doptimize=ReleaseSmall",
+    "build:frdye": "cd native-zig && zig build -Doptimize=ReleaseSmall",
     "build:napi": "cd native-zig && zig build"
   },
   "keywords": [],
