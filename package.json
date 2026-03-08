@@ -7,11 +7,11 @@
   "private": true,
   "scripts": {
     "dev": "electron-forge start",
-    "package": "zigar build && electron-forge package",
-    "make": "zigar build && electron-forge make",
-    "publish": "zigar build && electron-forge publish",
+    "package": "pnpm build:native && electron-forge package",
+    "make": "pnpm build:native && electron-forge make",
+    "publish": "pnpm build:native && electron-forge publish",
     "lint": "eslint",
-    "build:zigar": "zigar build"
+    "build:native": "zigar build && cd zig && zig build -Doptimize=ReleaseSmall"
   },
   "keywords": [],
   "author": {
@@ -43,7 +43,6 @@
     "vite": "^7.3.1"
   },
   "dependencies": {
-    "@tanstack/react-virtual": "^3.13.19",
     "electron-squirrel-startup": "^1.0.1",
     "fss-lang": "^0.0.5",
     "node-zigar": "^0.15.2",
