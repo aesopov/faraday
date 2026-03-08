@@ -93,6 +93,7 @@ export const ColumnsScroller = memo(function ColumnsScroller(props: ColumnsScrol
       <ScrollableContainer
         scrollTop={scrollTop}
         scrollHeight={(totalCount - 1) * itemHeight}
+        lineSize={itemHeight}
         style={{ height: '100%' }}
         innerContainerStyle={{ width: '100%', height: '100%' }}
         onScroll={onScroll}

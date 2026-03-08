@@ -8,7 +8,32 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-zigar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build:zigar
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zigar
+          path: lib/fs.zigar/
+
+  build-frdye:
     strategy:
       matrix:
         include:
@@ -26,6 +51,28 @@ jobs:
         with:
           version: 0.15.2
 
+      - run: pnpm build:frdye
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frdye-${{ matrix.artifact }}
+          path: zig/zig-out/
+
+  build:
+    needs: [build-zigar, build-frdye]
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: linux
+          - os: macos-latest
+            artifact: macos
+          - os: windows-latest
+            artifact: windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
@@ -34,6 +81,16 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: zigar
+          path: lib/fs.zigar/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: frdye-${{ matrix.artifact }}
+          path: zig/zig-out/
 
       - run: pnpm make
 
@@ -49,6 +106,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: dist-*
           merge-multiple: true
 
       - uses: softprops/action-gh-release@v2

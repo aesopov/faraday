@@ -8,10 +8,12 @@
   "scripts": {
     "dev": "electron-forge start",
     "package": "pnpm build:native && electron-forge package",
-    "make": "pnpm build:native && electron-forge make",
+    "make": "electron-forge make",
     "publish": "pnpm build:native && electron-forge publish",
     "lint": "eslint",
-    "build:native": "zigar build && cd zig && zig build -Doptimize=ReleaseSmall"
+    "build:zigar": "zigar build",
+    "build:frdye": "cd zig && zig build -Doptimize=ReleaseSmall",
+    "build:native": "pnpm build:zigar && pnpm build:frdye"
   },
   "keywords": [],
   "author": {

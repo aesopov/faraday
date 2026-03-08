@@ -5,6 +5,7 @@ interface ScrollableContainerProps {
   children: ReactNode;
   scrollHeight: number;
   scrollTop: number;
+  lineSize?: number;
   velocityFactor?: number;
   frictionFactor?: number;
   style?: CSSProperties;
@@ -16,6 +17,7 @@ export const ScrollableContainer: React.FC<ScrollableContainerProps> = ({
   children,
   scrollHeight,
   scrollTop,
+  lineSize,
   velocityFactor = 20,
   frictionFactor = 0.95,
   style,
@@ -55,8 +57,11 @@ export const ScrollableContainer: React.FC<ScrollableContainerProps> = ({
       }
     };
 
+    const isWindows = navigator.platform.startsWith('Win');
+
     const handleWheel = (event: WheelEvent) => {
-      updateScrollTop(event.deltaY);
+      const delta = lineSize && isWindows ? Math.sign(event.deltaY) * lineSize : event.deltaY;
+      updateScrollTop(delta);
       event.preventDefault();
     };
 
@@ -121,7 +126,7 @@ export const ScrollableContainer: React.FC<ScrollableContainerProps> = ({
         innerContainer.removeEventListener('pointercancel', handlePointerUp);
       }
     };
-  }, [velocityFactor, frictionFactor, scrollHeight]);
+  }, [velocityFactor, frictionFactor, scrollHeight, lineSize]);
 
   return (
     <div style={{ overflow: 'hidden', position: 'relative', touchAction: 'none', ...style }}>
