@@ -17,7 +17,7 @@ import {
   BufReader,
   BufWriter,
 } from '../protocol';
-import { FsaRawEntry, RawFs } from './types';
+import type { EntryKind, FsaRawEntry, RawFs } from './types';
 
 type Pending = { resolve: (payload: Buffer) => void; reject: (e: Error) => void };
 
@@ -121,16 +121,20 @@ export class FsProxy implements RawFs {
     const payload = await this.send(METHOD_ENTRIES, new BufWriter().str(dirPath).build());
     const r = new BufReader(payload);
     const count = r.u32();
+    // Must stay in sync with kindCode() in zig/src/main.zig
+    const KIND_MAP: EntryKind[] = ['unknown', 'file', 'directory', 'symlink', 'block_device', 'char_device', 'named_pipe', 'socket', 'whiteout'];
     const entries = [];
     for (let i = 0; i < count; i++) {
-      entries.push({
-        name: r.str(),
-        kind: r.u8() === 1 ? ('directory' as const) : ('file' as const),
-        size: r.f64(),
-        mtimeMs: r.f64(),
-        mode: r.u32(),
-        isSymbolicLink: r.u8() !== 0,
-      });
+      const name = r.str();
+      const kind = KIND_MAP[r.u8()] ?? 'unknown';
+      const size = r.f64();
+      const mtimeMs = r.f64();
+      const mode = r.u32();
+      const nlink = r.u32();
+      const hidden = r.u8() !== 0;
+      const hasLink = r.u8() !== 0;
+      const linkTarget = hasLink ? r.str() : undefined;
+      entries.push({ name, kind, size, mtimeMs, mode, nlink, hidden, linkTarget });
     }
     return entries;
   }

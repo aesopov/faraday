@@ -14,6 +14,9 @@ import { createPanelResolver, invalidateFssCache, syncLayers } from './fss';
 import { basename, dirname, join } from './path';
 
 function buildParentChain(dirPath: string): FsNode | undefined {
+  // At the filesystem root there is no parent — suppress the ".." entry.
+  if (dirname(dirPath) === dirPath) return undefined;
+
   const ancestors: string[] = [];
   let cur = dirPath;
   while (true) {
@@ -46,7 +49,10 @@ function handleToFsNode(handle: FileSystemHandle & { meta?: HandleMeta }, dirPat
       size: handle.meta?.size ?? 0,
       mtimeMs: handle.meta?.mtimeMs ?? 0,
       executable: !isDir && handle.meta != null && (handle.meta.mode & 0o111) !== 0,
-      hidden: handle.name.startsWith('.'),
+      hidden: handle.meta?.hidden ?? handle.name.startsWith('.'),
+      nlink: handle.meta?.nlink ?? 1,
+      entryKind: handle.meta?.kind ?? (isDir ? 'directory' : 'file'),
+      linkTarget: handle.meta?.linkTarget,
     },
     path: join(dirPath, handle.name),
     parent,
@@ -113,46 +119,49 @@ function usePanel(theme: ThemeKind, showError: (message: string) => void) {
     }
   }, []);
 
-  const navigateTo = useCallback(async (path: string) => {
-    navAbortRef.current?.abort();
-    const abort = new AbortController();
-    navAbortRef.current = abort;
+  const navigateTo = useCallback(
+    async (path: string) => {
+      navAbortRef.current?.abort();
+      const abort = new AbortController();
+      navAbortRef.current = abort;
 
-    navTimerRef.current = setTimeout(() => setNavigating(true), 300);
-    try {
-      const work = (async () => {
-        currentPathRef.current = path;
-        await syncLayers(resolverRef.current!, path);
-        if (abort.signal.aborted) return;
-        const dirHandle = new DirectoryHandle(path);
-        const parent = buildParentChain(path);
-        const nodes: FsNode[] = [];
-        for await (const [, handle] of dirHandle.entries()) {
+      navTimerRef.current = setTimeout(() => setNavigating(true), 300);
+      try {
+        const work = (async () => {
+          currentPathRef.current = path;
+          await syncLayers(resolverRef.current!, path);
           if (abort.signal.aborted) return;
-          nodes.push(handleToFsNode(handle, path, parent));
+          const dirHandle = new DirectoryHandle(path);
+          const parent = buildParentChain(path);
+          const nodes: FsNode[] = [];
+          for await (const [, handle] of dirHandle.entries()) {
+            if (abort.signal.aborted) return;
+            nodes.push(handleToFsNode(handle, path, parent));
+          }
+          if (abort.signal.aborted) return;
+          setState({ currentPath: path, parentNode: parent, entries: nodes });
+          setupWatches(path);
+        })();
+        // Suppress unhandled rejection from orphaned work after abort
+        work.catch(() => {});
+        await Promise.race([
+          work,
+          new Promise<void>((resolve) => {
+            abort.signal.addEventListener('abort', () => resolve(), { once: true });
+          }),
+        ]);
+      } catch (err) {
+        if (!abort.signal.aborted) {
+          showErrorRef.current(`Failed to read directory: ${err}`);
         }
-        if (abort.signal.aborted) return;
-        setState({ currentPath: path, parentNode: parent, entries: nodes });
-        setupWatches(path);
-      })();
-      // Suppress unhandled rejection from orphaned work after abort
-      work.catch(() => {});
-      await Promise.race([
-        work,
-        new Promise<void>((resolve) => {
-          abort.signal.addEventListener('abort', () => resolve(), { once: true });
-        }),
-      ]);
-    } catch (err) {
-      if (!abort.signal.aborted) {
-        showErrorRef.current(`Failed to read directory: ${err}`);
+      } finally {
+        clearTimeout(navTimerRef.current!);
+        navTimerRef.current = null;
+        setNavigating(false);
       }
-    } finally {
-      clearTimeout(navTimerRef.current!);
-      navTimerRef.current = null;
-      setNavigating(false);
-    }
-  }, [setupWatches]);
+    },
+    [setupWatches],
+  );
 
   const cancelNavigation = useCallback(() => {
     navAbortRef.current?.abort();
@@ -254,6 +263,7 @@ type PanelSide = 'left' | 'right';
 export function App() {
   const [theme, setTheme] = useState<ThemeKind>('dark');
   const [dialog, setDialog] = useState<Omit<ModalDialogProps, 'onClose'> | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
   const showError = useCallback((message: string) => {
     setDialog({ title: 'Error', message, variant: 'error' });
   }, []);
@@ -291,6 +301,9 @@ export function App() {
       } else if (e.key === 'Escape') {
         left.cancelNavigation();
         right.cancelNavigation();
+      } else if (e.key === '.' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        setShowHidden((s) => !s);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -309,7 +322,7 @@ export function App() {
           <FileList
             currentPath={left.currentPath}
             parentNode={left.parentNode}
-            entries={left.entries}
+            entries={showHidden ? left.entries : left.entries.filter((e) => !e.meta.hidden)}
             onNavigate={left.navigateTo}
             onViewFile={handleViewFile}
             active={activePanel === 'left'}
@@ -321,7 +334,7 @@ export function App() {
           <FileList
             currentPath={right.currentPath}
             parentNode={right.parentNode}
-            entries={right.entries}
+            entries={showHidden ? right.entries : right.entries.filter((e) => !e.meta.hidden)}
             onNavigate={right.navigateTo}
             onViewFile={handleViewFile}
             active={activePanel === 'right'}
@@ -329,23 +342,12 @@ export function App() {
           />
         </div>
       </div>
-      {viewerFile && (
-        isImageFile(viewerFile.name) ? (
-          <ImageViewer
-            filePath={viewerFile.path}
-            fileName={viewerFile.name}
-            fileSize={viewerFile.size}
-            onClose={() => setViewerFile(null)}
-          />
+      {viewerFile &&
+        (isImageFile(viewerFile.name) ? (
+          <ImageViewer filePath={viewerFile.path} fileName={viewerFile.name} fileSize={viewerFile.size} onClose={() => setViewerFile(null)} />
         ) : (
-          <FileViewer
-            filePath={viewerFile.path}
-            fileName={viewerFile.name}
-            fileSize={viewerFile.size}
-            onClose={() => setViewerFile(null)}
-          />
-        )
-      )}
+          <FileViewer filePath={viewerFile.path} fileName={viewerFile.name} fileSize={viewerFile.size} onClose={() => setViewerFile(null)} />
+        ))}
       {dialog && <ModalDialog {...dialog} onClose={() => setDialog(null)} />}
     </div>
   );

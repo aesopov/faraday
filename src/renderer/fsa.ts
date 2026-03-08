@@ -1,4 +1,4 @@
-import { FsaRawEntry } from 'src/fs/types';
+import { FsaRawEntry, type EntryKind } from 'src/fs/types';
 import type { FsChangeEvent, FsChangeType } from '../types';
 import { join } from './path';
 
@@ -6,7 +6,10 @@ export interface HandleMeta {
   size: number;
   mtimeMs: number;
   mode: number;
-  isSymbolicLink: boolean;
+  nlink: number;
+  kind: EntryKind;
+  hidden: boolean;
+  linkTarget?: string;
 }
 
 const readonlyError = () => {
@@ -157,8 +160,19 @@ export class DirectoryHandle implements FileSystemDirectoryHandle {
     const raw: FsaRawEntry[] = handleResponse(await window.electron.fsa.entries(this.path));
     for (const entry of raw) {
       const childPath = join(this.path, entry.name);
-      const meta = { size: entry.size, mtimeMs: entry.mtimeMs, mode: entry.mode, isSymbolicLink: entry.isSymbolicLink };
-      if (entry.kind === 'directory') {
+      const meta: HandleMeta = {
+        size: entry.size,
+        mtimeMs: entry.mtimeMs,
+        mode: entry.mode,
+        nlink: entry.nlink,
+        kind: entry.kind,
+        hidden: entry.hidden,
+        linkTarget: entry.linkTarget,
+      };
+      // S_IFMT=0o170000, S_IFDIR=0o040000: stat() follows symlinks, so mode
+      // reflects the target. A symlink to a directory gets S_IFDIR set.
+      const isDir = entry.kind === 'directory' || (entry.kind === 'symlink' && (entry.mode & 0o170000) === 0o040000);
+      if (isDir) {
         yield [entry.name, new DirectoryHandle(childPath, entry.name, meta)] as const;
       } else {
         yield [entry.name, new FileHandle(childPath, entry.name, meta)] as const;

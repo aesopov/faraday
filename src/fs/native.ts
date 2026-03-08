@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { app } from 'electron';
 import type { FsChangeEvent, FsChangeType } from '../types';
-import type { FsaRawEntry, RawFs } from './types';
+import type { EntryKind, FsaRawEntry, RawFs } from './types';
 
 // ── Load the Zig module via zigar ───────────────────────────────────
 
@@ -95,11 +95,13 @@ export class NativeFs implements RawFs {
       for (const e of raw) {
         result.push({
           name: zigStr(e.name),
-          kind: zigStr(e.kind) as 'file' | 'directory',
+          kind: zigStr(e.kind) as EntryKind,
           size: Number(e.size),
           mtimeMs: Number(e.mtimeMs),
           mode: Number(e.mode),
-          isSymbolicLink: Boolean(e.isSymbolicLink),
+          nlink: Number(e.nlink),
+          hidden: Boolean(e.hidden),
+          linkTarget: e.linkTarget != null ? zigStr(e.linkTarget) : undefined,
         });
       }
       return result;

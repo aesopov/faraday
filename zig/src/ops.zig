@@ -11,11 +11,16 @@ const Allocator = std.mem.Allocator;
 
 pub const EntryInfo = struct {
     name: []const u8,
-    kind: []const u8, // "directory" or "file"
+    /// One of: "file" "directory" "symlink" "block_device" "char_device"
+    ///         "named_pipe" "socket" "whiteout" "unknown"
+    kind: []const u8,
     size: f64,
     mtimeMs: f64,
     mode: u32,
-    isSymbolicLink: bool,
+    nlink: u32,
+    hidden: bool,
+    /// Non-null only when kind == "symlink".
+    linkTarget: ?[]const u8,
 };
 
 pub const StatResult = struct {
@@ -74,6 +79,31 @@ pub const FdTable = struct {
 
 // ── Operations ───────────────────────────────────────────────────────
 
+/// Map a Zig Dir.Entry.Kind to the canonical kind string.
+fn entryKindStr(k: std.fs.Dir.Entry.Kind) []const u8 {
+    return switch (k) {
+        .file => "file",
+        .directory => "directory",
+        .sym_link => "symlink",
+        .block_device => "block_device",
+        .character_device => "char_device",
+        .named_pipe => "named_pipe",
+        .unix_domain_socket => "socket",
+        .whiteout => "whiteout",
+        else => "unknown",
+    };
+}
+
+/// Return the hard-link count for an entry without following symlinks.
+/// Uses fstatatZ on POSIX; returns 1 on Windows (Windows hard links are rare
+/// and require opening the file, which we avoid for performance).
+fn entryNlink(dir: std.fs.Dir, name: []const u8) u32 {
+    if (comptime builtin.os.tag == .windows) return 1;
+    const name_z = std.posix.toPosixPath(name) catch return 1;
+    const st = std.posix.fstatatZ(dir.fd, &name_z, std.posix.AT.SYMLINK_NOFOLLOW) catch return 1;
+    return @intCast(st.nlink);
+}
+
 pub fn entries(dir_path: []const u8, allocator: Allocator) !std.ArrayList(EntryInfo) {
     var dir = try std.fs.openDirAbsolute(dir_path, .{ .iterate = true });
     defer dir.close();
@@ -81,26 +111,51 @@ pub fn entries(dir_path: []const u8, allocator: Allocator) !std.ArrayList(EntryI
     var list = std.ArrayList(EntryInfo).empty;
     var iter = dir.iterate();
     while (try iter.next()) |entry| {
+        // stat() follows symlinks → gives us target size/mtime/mode.
         var size: f64 = 0;
         var mtime_ms: f64 = 0;
         var mode: u32 = 0;
-
         if (dir.statFile(entry.name)) |st| {
             size = @floatFromInt(st.size);
             mtime_ms = @as(f64, @floatFromInt(st.mtime)) / 1_000_000.0;
             mode = if (comptime builtin.os.tag == .windows) 0 else @intCast(st.mode);
         } else |_| {}
 
+        var link_target: ?[]const u8 = null;
+        if (entry.kind == .sym_link) {
+            var link_buf: [4096]u8 = undefined;
+            if (dir.readLink(entry.name, &link_buf)) |target| {
+                link_target = try allocator.dupe(u8, target);
+            } else |_| {}
+        }
+
         try list.append(allocator, .{
             .name = try allocator.dupe(u8, entry.name),
-            .kind = if (entry.kind == .directory) "directory" else "file",
+            .kind = entryKindStr(entry.kind),
             .size = size,
             .mtimeMs = mtime_ms,
             .mode = mode,
-            .isSymbolicLink = entry.kind == .sym_link,
+            .nlink = entryNlink(dir, entry.name),
+            .hidden = isHidden(dir_path, entry.name),
+            .linkTarget = link_target,
         });
     }
     return list;
+}
+
+/// Determines whether a filesystem entry should be considered hidden.
+/// On Windows: queries FILE_ATTRIBUTE_HIDDEN via GetFileAttributesW.
+/// On all other platforms: dot-file convention (name starts with '.').
+fn isHidden(dir_path: []const u8, name: []const u8) bool {
+    if (comptime builtin.os.tag == .windows) {
+        var path_buf: [4096]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&path_buf);
+        const full = std.fs.path.join(fba.allocator(), &.{ dir_path, name }) catch return false;
+        const attrs = std.os.windows.GetFileAttributes(full) catch return false;
+        return (attrs & std.os.windows.FILE_ATTRIBUTE_HIDDEN) != 0;
+    } else {
+        return name.len > 0 and name[0] == '.';
+    }
 }
 
 pub fn stat(file_path: []const u8) !StatResult {

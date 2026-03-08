@@ -1,10 +1,15 @@
+export type EntryKind = 'file' | 'directory' | 'symlink' | 'block_device' | 'char_device' | 'named_pipe' | 'socket' | 'whiteout' | 'unknown';
+
 export interface FsaRawEntry {
   name: string;
-  kind: 'file' | 'directory';
+  kind: EntryKind;
   size: number;
   mtimeMs: number;
   mode: number;
-  isSymbolicLink: boolean;
+  nlink: number;
+  hidden: boolean;
+  /** Populated only when kind === 'symlink'. */
+  linkTarget?: string;
 }
 
 export type RawFs = {

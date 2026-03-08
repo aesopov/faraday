@@ -298,6 +298,15 @@ body {
   white-space: nowrap;
 }
 
+.file-info-link {
+  flex: 2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: monospace;
+  color: var(--fg-muted);
+}
+
 .file-info-size {
   font-family: monospace;
   min-width: 60px;

@@ -126,6 +126,22 @@ fn sendEvent(allocator: Allocator, file: proto.File, watch_id: []const u8, kind:
 
 // ── Request dispatch ─────────────────────────────────────────────────
 
+/// Encode an entry kind string as a compact u8 for the wire protocol.
+/// Must stay in sync with KIND_MAP in fsProxy.ts.
+/// 0=unknown 1=file 2=directory 3=symlink 4=block_device
+/// 5=char_device 6=named_pipe 7=socket 8=whiteout
+fn kindCode(kind: []const u8) u8 {
+    if (std.mem.eql(u8, kind, "file")) return 1;
+    if (std.mem.eql(u8, kind, "directory")) return 2;
+    if (std.mem.eql(u8, kind, "symlink")) return 3;
+    if (std.mem.eql(u8, kind, "block_device")) return 4;
+    if (std.mem.eql(u8, kind, "char_device")) return 5;
+    if (std.mem.eql(u8, kind, "named_pipe")) return 6;
+    if (std.mem.eql(u8, kind, "socket")) return 7;
+    if (std.mem.eql(u8, kind, "whiteout")) return 8;
+    return 0;
+}
+
 fn dispatch(
     method: proto.Method,
     reader: *proto.Reader,
@@ -143,11 +159,18 @@ fn dispatch(
             try out.u32_(@intCast(list.items.len));
             for (list.items) |item| {
                 try out.str_(item.name);
-                try out.u8_(if (std.mem.eql(u8, item.kind, "directory")) 1 else 0);
+                try out.u8_(kindCode(item.kind));
                 try out.f64_(item.size);
                 try out.f64_(item.mtimeMs);
                 try out.u32_(item.mode);
-                try out.u8_(if (item.isSymbolicLink) 1 else 0);
+                try out.u32_(item.nlink);
+                try out.u8_(if (item.hidden) 1 else 0);
+                if (item.linkTarget) |t| {
+                    try out.u8_(1);
+                    try out.str_(t);
+                } else {
+                    try out.u8_(0);
+                }
             }
         },
         .stat => {

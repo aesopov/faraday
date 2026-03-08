@@ -304,14 +304,44 @@ export const FileList = memo(function FileList({ currentPath, parentNode, entrie
   // Footer info
   const activeEntry = displayEntries[activeIndex];
   const footerName = activeEntry?.entry.name ?? '';
-  const footerSize = activeEntry
-    ? activeEntry.entry.type === 'folder'
-      ? activeEntry.entry.name === '..'
-        ? 'Up'
-        : 'DIR'
-      : formatSize(activeEntry.entry.meta.size)
-    : '';
   const footerDate = activeEntry ? formatDate(Number(activeEntry.entry.meta.mtimeMs ?? 0)) : '';
+  const footerInfo = (() => {
+    if (!activeEntry) return '';
+    const entry = activeEntry.entry;
+    if (entry.name === '..') return 'Up';
+    const kind: string = (entry.meta.entryKind as string | undefined) ?? (entry.type === 'folder' ? 'directory' : 'file');
+    const nlink: number = (entry.meta.nlink as number | undefined) ?? 1;
+    switch (kind) {
+      case 'directory':
+        return nlink > 1 ? `DIR [${nlink}]` : 'DIR';
+      case 'symlink':
+        return '';
+      case 'block_device':
+        return 'BLK DEV';
+      case 'char_device':
+        return 'CHR DEV';
+      case 'named_pipe':
+        return 'FIFO';
+      case 'socket':
+        return 'SOCK';
+      case 'whiteout':
+        return 'WHT';
+      case 'unknown':
+        return '?';
+      default: {
+        // file
+        const s = formatSize(entry.meta.size);
+        return nlink > 1 ? `${s} [${nlink}]` : s;
+      }
+    }
+  })();
+  const footerLink = (() => {
+    if (!activeEntry) return '';
+    const kind: string = (activeEntry.entry.meta.entryKind as string | undefined) ?? '';
+    if (kind !== 'symlink') return '';
+    const target = activeEntry.entry.meta.linkTarget as string | undefined;
+    return `\u2192 ${target ?? '?'}`;
+  })();
 
   // Summary
   const totalFiles = useMemo(() => displayEntries.filter((d) => d.entry.type === 'file').length, [displayEntries]);
@@ -341,7 +371,8 @@ export const FileList = memo(function FileList({ currentPath, parentNode, entrie
       </div>
       <div className="file-info-footer">
         <span className="file-info-name">{footerName}</span>
-        <span className="file-info-size">{footerSize}</span>
+        {footerLink && <span className="file-info-link">{footerLink}</span>}
+        <span className="file-info-size">{footerInfo}</span>
         <span className="file-info-date">{footerDate}</span>
       </div>
       <div className="panel-summary">

@@ -11,9 +11,9 @@
 file {
   icon: url(file.svg);
 }
-[hidden] {
+/* [hidden] {
   opacity: 0.5;
-}
+} */
 file[executable] {
   icon: url(./exe.svg);
   color: #e64a19;

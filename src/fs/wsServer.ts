@@ -9,6 +9,17 @@ import fsPromises from 'node:fs/promises';
 import path from 'node:path';
 import type { FsaRawEntry } from './types';
 import type { FsChangeType } from '../types';
+
+function direntKind(d: import('node:fs').Dirent): import('./types').EntryKind {
+  if (d.isDirectory()) return 'directory';
+  if (d.isSymbolicLink()) return 'symlink';
+  if (d.isBlockDevice()) return 'block_device';
+  if (d.isCharacterDevice()) return 'char_device';
+  if (d.isFIFO()) return 'named_pipe';
+  if (d.isSocket()) return 'socket';
+  if (d.isFile()) return 'file';
+  return 'unknown';
+}
 import { encodeBinaryFrame, type RpcRequest } from './wsProtocol';
 
 // ── Per-connection session ──────────────────────────────────────────
@@ -93,8 +104,10 @@ class FsSession {
       const fullPath = path.join(dirPath, d.name);
       let size = 0,
         mtimeMs = 0,
-        mode = 0;
+        mode = 0,
+        nlink = 1;
       try {
+        // stat() follows symlinks — target size/mtime/mode
         const st = await fsPromises.stat(fullPath);
         size = st.size;
         mtimeMs = st.mtimeMs;
@@ -102,13 +115,31 @@ class FsSession {
       } catch {
         /* skip stat errors */
       }
+      try {
+        // lstat() doesn't follow — own hard-link count
+        const lst = await fsPromises.lstat(fullPath);
+        nlink = lst.nlink;
+      } catch {
+        /* skip */
+      }
+      let linkTarget: string | undefined;
+      if (direntKind(d) === 'symlink') {
+        try {
+          linkTarget = await fsPromises.readlink(fullPath);
+        } catch {
+          /* skip */
+        }
+      }
       result.push({
         name: d.name,
-        kind: d.isDirectory() ? 'directory' : 'file',
+        kind: direntKind(d),
         size,
         mtimeMs,
         mode,
-        isSymbolicLink: d.isSymbolicLink(),
+        nlink,
+        // Node.js fs doesn't expose Windows hidden attribute; use dot-file convention on all platforms
+        hidden: d.name.startsWith('.'),
+        linkTarget,
       });
     }
     return result;
