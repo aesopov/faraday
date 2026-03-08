@@ -263,7 +263,7 @@ export const FileList = memo(function FileList({ currentPath, parentNode, entrie
     });
   }, []);
 
-  const lastClickTime = useRef(0);
+  const lastClickTimeRef = useRef(0);
 
   const renderItem = useCallback(
     (index: number) => {
@@ -281,11 +281,11 @@ export const FileList = memo(function FileList({ currentPath, parentNode, entrie
           onMouseDown={(e) => {
             e.stopPropagation();
             const now = Date.now();
-            if (now - lastClickTime.current < 300) {
-              lastClickTime.current = 0;
+            if (now - lastClickTimeRef.current < 300) {
+              lastClickTimeRef.current = 0;
               actionQueue.enqueue(() => navigateToEntry(entry));
             } else {
-              lastClickTime.current = now;
+              lastClickTimeRef.current = now;
               actionQueue.enqueue(() => setActiveIndex(index));
             }
           }}

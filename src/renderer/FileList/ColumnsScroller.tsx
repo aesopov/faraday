@@ -22,7 +22,8 @@ function Borders({ columnCount }: { columnCount: number }) {
 }
 
 export const ColumnsScroller = memo(function ColumnsScroller(props: ColumnsScrollerProps) {
-  let { topmostIndex, activeIndex, columnCount, totalCount, itemHeight, renderItem, onPosChange, onItemsPerColumnChanged } = props;
+  let { topmostIndex } = props;
+  const { activeIndex, columnCount, totalCount, itemHeight, renderItem, onPosChange, onItemsPerColumnChanged } = props;
 
   if (!Number.isInteger(itemHeight) || itemHeight <= 0) {
     throw new Error('itemHeight should be positive');

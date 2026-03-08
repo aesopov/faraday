@@ -45,6 +45,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm build:zigar
+      - run: pnpm build:native
 
       - run: pnpm make

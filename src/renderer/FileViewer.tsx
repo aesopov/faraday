@@ -81,7 +81,7 @@ export function FileViewer({ filePath, fileName, fileSize, onClose }: FileViewer
 
   // ── Line scanning helpers ──
 
-  const decoder = useRef(new TextDecoder());
+  const decoderRef = useRef(new TextDecoder());
 
   // Decode bytes to lines, splitting on 0x0A. Returns array of {text, byteStart, byteEnd}.
   function splitBytesToLines(bytes: Uint8Array, baseOffset: number): { text: string; byteStart: number; byteEnd: number }[] {
@@ -89,7 +89,7 @@ export function FileViewer({ filePath, fileName, fileSize, onClose }: FileViewer
     let lineStart = 0;
     for (let i = 0; i <= bytes.length; i++) {
       if (i === bytes.length || bytes[i] === 0x0A) {
-        const text = decoder.current.decode(bytes.subarray(lineStart, i));
+        const text = decoderRef.current.decode(bytes.subarray(lineStart, i));
         lines.push({
           text,
           byteStart: baseOffset + lineStart,
@@ -284,7 +284,7 @@ export function FileViewer({ filePath, fileName, fileSize, onClose }: FileViewer
         while (totalScreenLines < needed && walkPos > 0) {
           const prevStart = await findPrevLineStart(file, walkPos);
           const lineBytes = await getCachedBytes(file, prevStart, walkPos - prevStart);
-          const text = decoder.current.decode(lineBytes).replace(/\n$/, '');
+          const text = decoderRef.current.decode(lineBytes).replace(/\n$/, '');
           const screenCount = Math.max(1, Math.ceil(text.length / cols));
           logicalLines.unshift({ text, byteStart: prevStart, byteEnd: walkPos });
           totalScreenLines += screenCount;
@@ -320,7 +320,7 @@ export function FileViewer({ filePath, fileName, fileSize, onClose }: FileViewer
         const firstLine = current[0];
         // Read the full logical line
         const lineBytes = await getCachedBytes(file, firstLine.byteStart, firstLine.byteEnd - firstLine.byteStart);
-        const fullText = decoder.current.decode(lineBytes).replace(/\n$/, '');
+        const fullText = decoderRef.current.decode(lineBytes).replace(/\n$/, '');
         const allSegments = wrapLine({ text: fullText, byteStart: firstLine.byteStart, byteEnd: firstLine.byteEnd }, cols);
         // Find which segment index we're currently showing
         const curIdx = allSegments.findIndex(s => s.wrapOffset === firstLine.wrapOffset);
@@ -334,7 +334,7 @@ export function FileViewer({ filePath, fileName, fileSize, onClose }: FileViewer
           for (let i = 0; i < still && walkPos > 0;) {
             const prevStart = await findPrevLineStart(file, walkPos);
             const lineBytes2 = await getCachedBytes(file, prevStart, walkPos - prevStart);
-            const text = decoder.current.decode(lineBytes2).replace(/\n$/, '');
+            const text = decoderRef.current.decode(lineBytes2).replace(/\n$/, '');
             const segments = wrapLine({ text, byteStart: prevStart, byteEnd: walkPos }, cols);
             // Take segments from the end
             const take = Math.min(segments.length, still - i);
@@ -350,14 +350,14 @@ export function FileViewer({ filePath, fileName, fileSize, onClose }: FileViewer
           const prevStart = await findPrevLineStart(file, walkPos);
           if (wrapRef.current) {
             const lineBytes = await getCachedBytes(file, prevStart, walkPos - prevStart);
-            const text = decoder.current.decode(lineBytes).replace(/\n$/, '');
+            const text = decoderRef.current.decode(lineBytes).replace(/\n$/, '');
             const segments = wrapLine({ text, byteStart: prevStart, byteEnd: walkPos }, cols);
             const take = Math.min(segments.length, count - i);
             prepended.unshift(...segments.slice(segments.length - take));
             i += take;
           } else {
             const lineBytes = await getCachedBytes(file, prevStart, walkPos - prevStart);
-            const text = decoder.current.decode(lineBytes).replace(/\n$/, '');
+            const text = decoderRef.current.decode(lineBytes).replace(/\n$/, '');
             prepended.unshift({ text, byteStart: prevStart, byteEnd: walkPos, wrapOffset: 0 });
             i++;
           }
@@ -659,6 +659,7 @@ export function FileViewer({ filePath, fileName, fileSize, onClose }: FileViewer
             MMMMMMMMMM
           </span>
           {screenLines.map((line, i) => (
+            // eslint-disable-next-line @eslint-react/no-array-index-key
             <div key={i} className="file-viewer-line">
               {line.text || '\u00A0'}
             </div>
