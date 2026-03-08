@@ -44,8 +44,8 @@ const config: ForgeConfig = {
     ],
   },
   rebuildConfig: {},
-  // makers: [new MakerMSIX({}), new MakerZIP({}, ['darwin', 'linux', 'win32']), new MakerRpm({}), new MakerDeb({})],
-  makers: [new MakerZIP({}, ['darwin', 'linux', 'win32'])],
+  makers: [new MakerMSIX({}), new MakerZIP({}, ['darwin']), new MakerRpm({}), new MakerDeb({})],
+  // makers: [new MakerZIP({}, ['darwin', 'linux', 'win32'])],
   plugins: [
     new VitePlugin({
       // `build` can specify multiple entry builds, which can be Main process, Preload scripts, Worker process, etc.

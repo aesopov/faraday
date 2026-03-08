@@ -75,10 +75,10 @@ export function FileViewer({ filePath, fileName, fileSize, onClose }: FileViewer
   }, [onClose]);
 
   // Focus the scroll body once scanning finishes (only on first scan)
-  const initialFocusDone = useRef(false);
+  const initialFocusDoneRef = useRef(false);
   useEffect(() => {
-    if (lineOffsets && !initialFocusDone.current) {
-      initialFocusDone.current = true;
+    if (lineOffsets && !initialFocusDoneRef.current) {
+      initialFocusDoneRef.current = true;
       scrollRef.current?.focus();
     }
   }, [lineOffsets]);
