@@ -66,6 +66,7 @@ async function getProxy(): Promise<FsProxy> {
 // ── Escalation helpers ───────────────────────────────────────────────
 
 function isElevatable(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
   const code = (err as NodeJS.ErrnoException)?.code;
   return code === 'EACCES';
 }

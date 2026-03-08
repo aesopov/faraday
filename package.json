@@ -7,12 +7,11 @@
   "private": true,
   "scripts": {
     "dev": "electron-forge start",
-    "package": "electron-forge package",
-    "make": "electron-forge make",
-    "publish": "electron-forge publish",
+    "package": "zigar build && electron-forge package",
+    "make": "zigar build && electron-forge make",
+    "publish": "zigar build && electron-forge publish",
     "lint": "eslint",
-    "build:helper-zig": "cd native-zig && zig build -Doptimize=ReleaseSmall",
-    "build:napi": "cd native-zig && zig build"
+    "build:zigar": "zigar build"
   },
   "keywords": [],
   "author": {
@@ -29,16 +28,16 @@
     "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
     "@electron-forge/plugin-fuses": "^7.11.1",
     "@electron-forge/plugin-vite": "^7.11.1",
-    "@electron/fuses": "^2.1.0",
+    "@electron/fuses": "^1.8.0",
     "@eslint/js": "^10.0.1",
     "@types/electron-squirrel-startup": "^1.0.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.5.14",
     "@typescript-eslint/eslint-plugin": "^8.56.1",
     "@typescript-eslint/parser": "^8.56.1",
     "electron": "40.6.1",
     "eslint": "^10.0.2",
-    "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "typescript": "~5.9.3",
@@ -50,8 +49,10 @@
     "electron-squirrel-startup": "^1.0.1",
     "fss-lang": "^0.0.5",
     "memfs": "^4.56.10",
+    "node-zigar": "^0.15.2",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "ws": "^8.18.0"
   },
   "packageManager": "pnpm@10.30.3"
 }
