@@ -16,9 +16,9 @@ export interface ElevatedChild {
 function helperPath(): string {
   const ext = process.platform === 'win32' ? '.exe' : '';
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, `faraday-helper${ext}`);
+    return path.join(process.resourcesPath, `frdye${ext}`);
   }
-  return path.join(app.getAppPath(), 'native-zig', 'zig-out', 'bin', `faraday-helper${ext}`);
+  return path.join(app.getAppPath(), 'zig', 'zig-out', 'bin', `frdye${ext}`);
 }
 
 function socketPath(): string {

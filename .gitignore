@@ -92,5 +92,9 @@ typings/
 out/
 
 # Native helper build artifacts
-native-zig/zig-out/
-native-zig/.zig-cache/
+zig/zig-out/
+zig/.zig-cache/
+
+# Zigar build artifacts
+lib/fs.zigar/
+lib/node-zigar-addon/

@@ -1,0 +1,225 @@
+// WebSocket filesystem server — JSON-RPC 2.0 + binary frames.
+//
+// Uses Node.js fs for all operations (no zig dependency), so this
+// server can run standalone outside of Electron.
+
+import { WebSocketServer, WebSocket } from 'ws';
+import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
+import path from 'node:path';
+import type { FsaRawEntry } from './types';
+import type { FsChangeType } from '../types';
+import { encodeBinaryFrame, type RpcRequest } from './wsProtocol';
+
+// ── Per-connection session ──────────────────────────────────────────
+
+class FsSession {
+  private nextHandle = 0;
+  private files = new Map<string, fsPromises.FileHandle>();
+  private watches = new Map<string, fs.FSWatcher>();
+
+  constructor(private ws: WebSocket) {
+    ws.on('message', (data: Buffer | ArrayBuffer | Buffer[], isBinary: boolean) => {
+      if (!isBinary) {
+        this.handleText(data.toString());
+      }
+      // Client never sends binary frames (only server does for reads)
+    });
+    ws.on('close', () => this.cleanup());
+  }
+
+  private async handleText(text: string): Promise<void> {
+    let msg: RpcRequest;
+    try {
+      msg = JSON.parse(text);
+    } catch {
+      return;
+    }
+    if (!msg.id && msg.id !== 0) return;
+
+    try {
+      // fs.read sends binary directly — no JSON result
+      if (msg.method === 'fs.read') {
+        const p = msg.params;
+        const data = await this.readFile(p.handle as string, p.offset as number, p.length as number);
+        this.ws.send(encodeBinaryFrame(msg.id, data));
+        return;
+      }
+
+      const result = await this.dispatch(msg);
+      this.sendJson({ jsonrpc: '2.0', id: msg.id, result });
+    } catch (err) {
+      const e = err as NodeJS.ErrnoException;
+      this.sendJson({
+        jsonrpc: '2.0',
+        id: msg.id,
+        error: {
+          code: -1,
+          message: e.message,
+          data: { errno: e.code ?? 'EIO' },
+        },
+      });
+    }
+  }
+
+  private async dispatch(msg: RpcRequest): Promise<unknown> {
+    const p = msg.params;
+    switch (msg.method) {
+      case 'fs.entries':
+        return this.entries(p.path as string);
+      case 'fs.stat':
+        return this.stat(p.path as string);
+      case 'fs.exists':
+        return this.exists(p.path as string);
+      case 'fs.open':
+        return this.openFile(p.path as string);
+      case 'fs.close':
+        return this.closeFile(p.handle as string);
+      case 'fs.watch':
+        return this.watch(p.watchId as string, p.path as string);
+      case 'fs.unwatch':
+        return this.unwatch(p.watchId as string);
+      default:
+        throw Object.assign(new Error(`Unknown method: ${msg.method}`), { code: 'EINVAL' });
+    }
+  }
+
+  // ── FS operations ───────────────────────────────────────────────
+
+  private async entries(dirPath: string): Promise<FsaRawEntry[]> {
+    const dirents = await fsPromises.readdir(dirPath, { withFileTypes: true });
+    const result: FsaRawEntry[] = [];
+    for (const d of dirents) {
+      const fullPath = path.join(dirPath, d.name);
+      let size = 0,
+        mtimeMs = 0,
+        mode = 0;
+      try {
+        const st = await fsPromises.stat(fullPath);
+        size = st.size;
+        mtimeMs = st.mtimeMs;
+        mode = st.mode;
+      } catch {
+        /* skip stat errors */
+      }
+      result.push({
+        name: d.name,
+        kind: d.isDirectory() ? 'directory' : 'file',
+        size,
+        mtimeMs,
+        mode,
+        isSymbolicLink: d.isSymbolicLink(),
+      });
+    }
+    return result;
+  }
+
+  private async stat(filePath: string): Promise<{ size: number; mtimeMs: number }> {
+    const st = await fsPromises.stat(filePath);
+    return { size: st.size, mtimeMs: st.mtimeMs };
+  }
+
+  private async exists(filePath: string): Promise<boolean> {
+    try {
+      await fsPromises.access(filePath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async openFile(filePath: string): Promise<string> {
+    const fh = await fsPromises.open(filePath, 'r');
+    const handle = `ws-fd-${this.nextHandle++}`;
+    this.files.set(handle, fh);
+    return handle;
+  }
+
+  private async readFile(handle: string, offset: number, length: number): Promise<Buffer> {
+    const fh = this.files.get(handle);
+    if (!fh) throw Object.assign(new Error('Invalid handle'), { code: 'EBADF' });
+    const buf = Buffer.alloc(length);
+    const { bytesRead } = await fh.read(buf, 0, length, offset);
+    return buf.subarray(0, bytesRead);
+  }
+
+  private async closeFile(handle: string): Promise<void> {
+    const fh = this.files.get(handle);
+    if (fh) {
+      await fh.close();
+      this.files.delete(handle);
+    }
+  }
+
+  private watch(watchId: string, dirPath: string): { ok: boolean } {
+    try {
+      const watcher = fs.watch(dirPath, async (_eventType, filename) => {
+        if (!filename) return;
+        let type: FsChangeType;
+        if (_eventType === 'rename') {
+          const exists = await fsPromises.access(path.join(dirPath, filename)).then(
+            () => true,
+            () => false,
+          );
+          type = exists ? 'appeared' : 'disappeared';
+        } else {
+          type = 'modified';
+        }
+        this.sendNotification('fs.change', { watchId, type, name: filename });
+      });
+      watcher.on('error', () => {
+        this.sendNotification('fs.change', { watchId, type: 'errored', name: null });
+      });
+      this.watches.set(watchId, watcher);
+      return { ok: true };
+    } catch {
+      return { ok: false };
+    }
+  }
+
+  private unwatch(watchId: string): void {
+    const watcher = this.watches.get(watchId);
+    if (watcher) {
+      watcher.close();
+      this.watches.delete(watchId);
+    }
+  }
+
+  // ── Helpers ─────────────────────────────────────────────────────
+
+  private sendJson(msg: object): void {
+    if (this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(msg));
+    }
+  }
+
+  private sendNotification(method: string, params: Record<string, unknown>): void {
+    this.sendJson({ jsonrpc: '2.0', method, params });
+  }
+
+  private async cleanup(): Promise<void> {
+    for (const fh of this.files.values()) {
+      await fh.close().catch(() => {});
+    }
+    this.files.clear();
+    for (const watcher of this.watches.values()) {
+      watcher.close();
+    }
+    this.watches.clear();
+  }
+}
+
+// ── Server factory ──────────────────────────────────────────────────
+
+export interface FsServerOptions {
+  port: number;
+  host?: string;
+}
+
+export function startFsServer(options: FsServerOptions): WebSocketServer {
+  const wss = new WebSocketServer({ port: options.port, host: options.host ?? '127.0.0.1' });
+  wss.on('connection', (ws) => {
+    new FsSession(ws);
+  });
+  return wss;
+}

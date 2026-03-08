@@ -3,78 +3,155 @@ import { app } from 'electron';
 import type { FsChangeEvent, FsChangeType } from '../types';
 import type { FsaRawEntry, RawFs } from './types';
 
-// ── Load the Zig N-API addon ─────────────────────────────────────────
+// ── Load the Zig module via zigar ───────────────────────────────────
 
-interface NativeAddon {
-  entries(dirPath: string): FsaRawEntry[];
-  stat(filePath: string): { size: number; mtimeMs: number };
-  exists(filePath: string): boolean;
-  open(filePath: string): string;
-  read(fdId: string, offset: number, length: number): Buffer;
-  close(fdId: string): void;
-  setWatchCallback(cb: (watchId: string, type: string, name: string | null) => void): void;
-  watch(watchId: string, dirPath: string): { ok: boolean };
-  unwatch(watchId: string): void;
+function loadZigFs() {
+  if (app.isPackaged) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require('node-zigar/cjs');
+    // console.error('***', require(path.join(process.resourcesPath, 'node-zigar')));
+
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require(path.join(process.resourcesPath, 'lib/fs.zigar'));
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  require('node-zigar/cjs');
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require('../../lib/fs.zigar');
 }
 
-function loadAddon(): NativeAddon {
-  const addonPath = app.isPackaged
-    ? path.join(
-        process.resourcesPath,
-        process.platform === 'darwin'
-          ? 'libfaraday_napi.dylib'
-          : 'faraday_napi.node',
-      )
-    : path.join(app.getAppPath(), 'native-zig', 'zig-out', 'lib', 'faraday_napi.node');
+const zigFs = loadZigFs();
 
-  const m = { exports: {} as NativeAddon };
-  process.dlopen(m, addonPath);
-  return m.exports;
+// ── Zigar helpers ───────────────────────────────────────────────────
+
+/** Convert a zigar []const u8 slice to a JS string. */
+function zigStr(slice: { valueOf(): number[] }): string {
+  return Buffer.from(slice.valueOf()).toString('utf-8');
 }
 
-const addon = loadAddon();
+// ── Zig error → Node.js errno mapping ───────────────────────────────
 
-// ── Global watch callback (broadcast to all windows) ─────────────────
+const ZIG_ERROR_CODES: Record<string, string> = {
+  FileNotFound: 'ENOENT',
+  NoDevice: 'ENOENT',
+  AccessDenied: 'EACCES',
+  NotDir: 'ENOTDIR',
+  IsDir: 'EISDIR',
+  OutOfMemory: 'ENOMEM',
+  PathAlreadyExists: 'EEXIST',
+  InvalidHandle: 'EBADF',
+  EndOfBuffer: 'EINVAL',
+};
 
-/** Register the global watch event callback. Call once during init. */
+function toNodeError(err: unknown): never {
+  if (err instanceof Error && !('code' in err)) {
+    const code = ZIG_ERROR_CODES[err.message];
+    if (code) (err as NodeJS.ErrnoException).code = code;
+  }
+  throw err;
+}
+
+// ── Watch polling ───────────────────────────────────────────────────
+
+let pollTimer: ReturnType<typeof setInterval> | null = null;
+let watchCallback: ((event: FsChangeEvent) => void) | null = null;
+
 export function initWatchCallback(cb: (event: FsChangeEvent) => void): void {
-  addon.setWatchCallback((watchId: string, type: string, name: string | null) => {
-    cb({ watchId, type: type as FsChangeType, name });
-  });
+  watchCallback = cb;
+  if (!pollTimer) {
+    pollTimer = setInterval(() => {
+      if (!watchCallback) return;
+      const events = zigFs.pollWatchEvents();
+      if (!events) return;
+      for (const ev of events) {
+        const name = ev.name;
+        watchCallback({
+          watchId: zigStr(ev.watch_id),
+          type: zigStr(ev.kind) as FsChangeType,
+          name: name != null ? zigStr(name) : null,
+        });
+      }
+    }, 50);
+  }
 }
 
-// ── NativeFs — unified RawFs using the Zig N-API addon ───────────────
+export function stopWatchPolling(): void {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+  watchCallback = null;
+}
+
+// ── NativeFs — unified RawFs using the Zig zigar module ─────────────
 
 export class NativeFs implements RawFs {
   async entries(dirPath: string): Promise<FsaRawEntry[]> {
-    return addon.entries(dirPath);
+    try {
+      const raw = zigFs.entries(dirPath);
+      const result: FsaRawEntry[] = [];
+      for (const e of raw) {
+        result.push({
+          name: zigStr(e.name),
+          kind: zigStr(e.kind) as 'file' | 'directory',
+          size: Number(e.size),
+          mtimeMs: Number(e.mtimeMs),
+          mode: Number(e.mode),
+          isSymbolicLink: Boolean(e.isSymbolicLink),
+        });
+      }
+      return result;
+    } catch (err) {
+      toNodeError(err);
+    }
   }
 
   async stat(filePath: string): Promise<{ size: number; mtimeMs: number }> {
-    return addon.stat(filePath);
+    try {
+      const s = zigFs.stat(filePath);
+      return { size: Number(s.size), mtimeMs: Number(s.mtimeMs) };
+    } catch (err) {
+      toNodeError(err);
+    }
   }
 
   async exists(filePath: string): Promise<boolean> {
-    return addon.exists(filePath);
+    return Boolean(zigFs.exists(filePath));
   }
 
   async open(filePath: string): Promise<string> {
-    return addon.open(filePath);
+    try {
+      return zigStr(zigFs.open(filePath));
+    } catch (err) {
+      toNodeError(err);
+    }
   }
 
   async read(fdId: string, offset: number, length: number): Promise<Buffer> {
-    return addon.read(fdId, offset, length);
+    try {
+      const data = zigFs.read(fdId, offset, length);
+      return Buffer.from(data);
+    } catch (err) {
+      toNodeError(err);
+    }
   }
 
   async close(fdId: string): Promise<void> {
-    addon.close(fdId);
+    zigFs.close(fdId);
   }
 
   async watch(watchId: string, dirPath: string): Promise<{ ok: boolean }> {
-    return addon.watch(watchId, dirPath);
+    try {
+      const ok = zigFs.watch(watchId, dirPath);
+      return { ok: Boolean(ok) };
+    } catch (err) {
+      toNodeError(err);
+    }
   }
 
   async unwatch(watchId: string): Promise<void> {
-    addon.unwatch(watchId);
+    zigFs.unwatch(watchId);
   }
 }

@@ -1,0 +1,7 @@
+.{
+    .name = .native_zig,
+    .version = "0.15.2",
+    .dependencies = .{},
+    .paths = .{""},
+    .fingerprint = 0x70c09f88a49e975a,
+}
