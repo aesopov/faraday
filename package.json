@@ -2,7 +2,7 @@
   "name": "faraday",
   "productName": "faraday",
   "version": "0.0.10",
-  "description": "My Electron application description",
+  "description": "Dual-pane file manager built with Electron + React + Zig",
   "main": ".vite/build/main.js",
   "private": true,
   "scripts": {

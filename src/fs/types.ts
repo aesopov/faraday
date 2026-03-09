@@ -16,9 +16,9 @@ export type RawFs = {
   entries(dirPath: string): Promise<FsaRawEntry[]>;
   stat(filePath: string): Promise<{ size: number; mtimeMs: number }>;
   exists(filePath: string): Promise<boolean>;
-  open(filePath: string): Promise<string>;
-  read(fdId: string, offset: number, length: number): Promise<Buffer>;
-  close(fdId: string): Promise<void>;
+  open(filePath: string): Promise<number>;
+  read(fd: number, offset: number, length: number): Promise<Buffer>;
+  close(fd: number): Promise<void>;
   watch(watchId: string, dirPath: string): Promise<{ ok: boolean }>;
   unwatch(watchId: string): Promise<void>;
 };

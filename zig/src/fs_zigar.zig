@@ -12,15 +12,10 @@ const posix = std.posix;
 const ops = @import("ops.zig");
 const watch_mod = @import("watch.zig");
 
-const alloc = std.heap.c_allocator;
-
 // ── Directory listing ──────────────────────────────────────────────
 
-var entries_arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
-
-pub fn entries(dir_path: []const u8) ![]const ops.EntryInfo {
-    _ = entries_arena.reset(.free_all);
-    const list = try ops.entries(dir_path, entries_arena.allocator());
+pub fn entries(dir_path: []const u8, allocator: std.mem.Allocator) ![]const ops.EntryInfo {
+    const list = try ops.entries(dir_path, allocator);
     return list.items;
 }
 
@@ -44,25 +39,22 @@ fn getFdt() *ops.FdTable {
     g_fdt_mu.lock();
     defer g_fdt_mu.unlock();
     if (!g_fdt_init) {
-        g_fdt = ops.FdTable.init(alloc);
+        g_fdt = ops.FdTable.init(std.heap.c_allocator);
         g_fdt_init = true;
     }
     return &g_fdt;
 }
 
-pub fn open(file_path: []const u8) ![]const u8 {
-    return ops.open(file_path, getFdt());
+pub fn open(file_path: []const u8) !i32 {
+    return ops.handleToI32(try ops.open(file_path, getFdt()));
 }
 
-/// Returns a mutable slice allocated with c_allocator.
-/// Zigar creates an external ArrayBuffer backed by this memory and
-/// frees it when the JS wrapper is garbage-collected.
-pub fn read(fd_id: []const u8, offset: i64, length: usize) ![]u8 {
-    return ops.read(fd_id, offset, length, getFdt(), alloc);
+pub fn read(fd: i32, offset: i64, length: usize, allocator: std.mem.Allocator) ![]u8 {
+    return ops.read(ops.i32ToHandle(fd), offset, length, getFdt(), allocator);
 }
 
-pub fn close(fd_id: []const u8) void {
-    ops.close(fd_id, getFdt());
+pub fn close(fd: i32) void {
+    ops.close(ops.i32ToHandle(fd), getFdt());
 }
 
 // ── Watch ──────────────────────────────────────────────────────────
@@ -154,7 +146,7 @@ pub fn watch(watch_id: []const u8, dir_path: []const u8) !bool {
     defer g_watch_mu.unlock();
 
     if (g_watcher == null) {
-        g_watcher = try watch_mod.Watcher.init(alloc);
+        g_watcher = try watch_mod.Watcher.init(std.heap.c_allocator);
     }
     _ = g_watcher.?.addWatch(watch_id, dir_path);
 

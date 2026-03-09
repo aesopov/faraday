@@ -151,22 +151,22 @@ export class FsProxy implements RawFs {
     return r.u8() !== 0;
   }
 
-  async open(filePath: string): Promise<string> {
+  async open(filePath: string): Promise<number> {
     const payload = await this.send(METHOD_OPEN, new BufWriter().str(filePath).build());
     const r = new BufReader(payload);
-    return `proxy:${r.str()}`;
+    return -r.f64(); // negate to mark as proxy fd
   }
 
-  async read(fdId: string, offset: number, length: number): Promise<Buffer> {
-    const remoteFdId = fdId.replace(/^proxy:/, '');
-    const payload = await this.send(METHOD_READ, new BufWriter().str(remoteFdId).f64(offset).f64(length).build());
+  async read(fd: number, offset: number, length: number): Promise<Buffer> {
+    const remoteFd = -fd; // un-negate to get remote handle
+    const payload = await this.send(METHOD_READ, new BufWriter().f64(remoteFd).f64(offset).f64(length).build());
     const r = new BufReader(payload);
     return r.bytes();
   }
 
-  async close(fdId: string): Promise<void> {
-    const remoteFdId = fdId.replace(/^proxy:/, '');
-    await this.send(METHOD_CLOSE, new BufWriter().str(remoteFdId).build());
+  async close(fd: number): Promise<void> {
+    const remoteFd = -fd;
+    await this.send(METHOD_CLOSE, new BufWriter().f64(remoteFd).build());
   }
 
   async watch(watchId: string, dirPath: string): Promise<{ ok: boolean }> {

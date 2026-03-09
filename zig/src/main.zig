@@ -182,18 +182,18 @@ fn dispatch(
             try out.u8_(if (ops.exists(try reader.str())) 1 else 0);
         },
         .open => {
-            const id = try ops.open(try reader.str(), fdt);
-            try out.str_(id);
+            const handle = try ops.open(try reader.str(), fdt);
+            try out.f64_(@floatFromInt(ops.handleToI32(handle)));
         },
         .read => {
-            const fd_id = try reader.str();
+            const fd: i32 = @intFromFloat(try reader.f64_());
             const offset: i64 = @intFromFloat(try reader.f64_());
             const length: usize = @intFromFloat(try reader.f64_());
-            const data = try ops.read(fd_id, offset, length, fdt, allocator);
+            const data = try ops.read(ops.i32ToHandle(fd), offset, length, fdt, allocator);
             defer allocator.free(data);
             try out.bytes(data);
         },
-        .close => ops.close(try reader.str(), fdt),
+        .close => ops.close(ops.i32ToHandle(@intFromFloat(try reader.f64_())), fdt),
         .watch => {
             const wid = try reader.str();
             const path = try reader.str();

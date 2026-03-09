@@ -33,16 +33,27 @@ function zigStr(slice: { valueOf(): number[] }): string {
 
 // ── Zig error → Node.js errno mapping ───────────────────────────────
 
+// Maps both raw Zig error names (e.g. "AccessDenied") and the
+// human-readable form produced by zigar (e.g. "Access denied").
 const ZIG_ERROR_CODES: Record<string, string> = {
   FileNotFound: 'ENOENT',
+  'File not found': 'ENOENT',
   NoDevice: 'ENOENT',
+  'No device': 'ENOENT',
   AccessDenied: 'EACCES',
+  'Access denied': 'EACCES',
   NotDir: 'ENOTDIR',
+  'Not dir': 'ENOTDIR',
   IsDir: 'EISDIR',
+  'Is dir': 'EISDIR',
   OutOfMemory: 'ENOMEM',
+  'Out of memory': 'ENOMEM',
   PathAlreadyExists: 'EEXIST',
+  'Path already exists': 'EEXIST',
   InvalidHandle: 'EBADF',
+  'Invalid handle': 'EBADF',
   EndOfBuffer: 'EINVAL',
+  'End of buffer': 'EINVAL',
 };
 
 function toNodeError(err: unknown): never {
@@ -123,25 +134,25 @@ export class NativeFs implements RawFs {
     return Boolean(zigFs.exists(filePath));
   }
 
-  async open(filePath: string): Promise<string> {
+  async open(filePath: string): Promise<number> {
     try {
-      return zigStr(zigFs.open(filePath));
+      return Number(zigFs.open(filePath));
     } catch (err) {
       toNodeError(err);
     }
   }
 
-  async read(fdId: string, offset: number, length: number): Promise<Buffer> {
+  async read(fd: number, offset: number, length: number): Promise<Buffer> {
     try {
-      const data = zigFs.read(fdId, offset, length);
+      const data = zigFs.read(fd, offset, length);
       return Buffer.from(data);
     } catch (err) {
       toNodeError(err);
     }
   }
 
-  async close(fdId: string): Promise<void> {
-    zigFs.close(fdId);
+  async close(fd: number): Promise<void> {
+    zigFs.close(fd);
   }
 
   async watch(watchId: string, dirPath: string): Promise<{ ok: boolean }> {

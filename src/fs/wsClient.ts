@@ -120,12 +120,12 @@ export class WsFs implements RawFs {
     return (await this.rpc('fs.exists', { path: filePath })) as boolean;
   }
 
-  async open(filePath: string): Promise<string> {
-    return (await this.rpc('fs.open', { path: filePath })) as string;
+  async open(filePath: string): Promise<number> {
+    return (await this.rpc('fs.open', { path: filePath })) as number;
   }
 
-  async read(fdId: string, offset: number, length: number): Promise<Buffer> {
-    const data = await this.rpc('fs.read', { handle: fdId, offset, length });
+  async read(fd: number, offset: number, length: number): Promise<Buffer> {
+    const data = await this.rpc('fs.read', { handle: fd, offset, length });
     // Binary frame: data is an ArrayBuffer
     if (data instanceof ArrayBuffer) {
       return Buffer.from(data);
@@ -133,8 +133,8 @@ export class WsFs implements RawFs {
     return data as Buffer;
   }
 
-  async close(fdId: string): Promise<void> {
-    await this.rpc('fs.close', { handle: fdId });
+  async close(fd: number): Promise<void> {
+    await this.rpc('fs.close', { handle: fd });
   }
 
   async watch(watchId: string, dirPath: string): Promise<{ ok: boolean }> {

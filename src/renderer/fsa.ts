@@ -28,7 +28,7 @@ const handleResponse = <T>(res: { result?: T; error?: any }): T => {
 
 const CHUNK_SIZE = 65536; // 64 KB
 
-function lazyReadMethods(fd: string, offset: number, length: number) {
+function lazyReadMethods(fd: number, offset: number, length: number) {
   return {
     async arrayBuffer(): Promise<ArrayBuffer> {
       const buf = handleResponse(await window.electron.fsa.read(fd, offset, length));
@@ -66,12 +66,12 @@ function lazyReadMethods(fd: string, offset: number, length: number) {
 }
 
 export class LazyBlob extends Blob {
-  readonly #fd: string;
+  readonly #fd: number;
   readonly #offset: number;
   readonly #length: number;
   readonly #type: string;
 
-  constructor(fd: string, offset: number, length: number, type = '') {
+  constructor(fd: number, offset: number, length: number, type = '') {
     super([]);
     this.#fd = fd;
     this.#offset = offset;
@@ -107,10 +107,10 @@ export class LazyBlob extends Blob {
 }
 
 export class LazyFile extends File {
-  readonly #fd: string;
+  readonly #fd: number;
   readonly #size: number;
 
-  constructor(fd: string, size: number, name: string, lastModified: number) {
+  constructor(fd: number, size: number, name: string, lastModified: number) {
     super([], name, { lastModified });
     this.#fd = fd;
     this.#size = size;

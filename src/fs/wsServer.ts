@@ -25,8 +25,8 @@ import { encodeBinaryFrame, type RpcRequest } from './wsProtocol';
 // ── Per-connection session ──────────────────────────────────────────
 
 class FsSession {
-  private nextHandle = 0;
-  private files = new Map<string, fsPromises.FileHandle>();
+  private nextHandle = 1;
+  private files = new Map<number, fsPromises.FileHandle>();
   private watches = new Map<string, fs.FSWatcher>();
 
   constructor(private ws: WebSocket) {
@@ -52,7 +52,7 @@ class FsSession {
       // fs.read sends binary directly — no JSON result
       if (msg.method === 'fs.read') {
         const p = msg.params;
-        const data = await this.readFile(p.handle as string, p.offset as number, p.length as number);
+        const data = await this.readFile(p.handle as number, p.offset as number, p.length as number);
         this.ws.send(encodeBinaryFrame(msg.id, data));
         return;
       }
@@ -85,7 +85,7 @@ class FsSession {
       case 'fs.open':
         return this.openFile(p.path as string);
       case 'fs.close':
-        return this.closeFile(p.handle as string);
+        return this.closeFile(p.handle as number);
       case 'fs.watch':
         return this.watch(p.watchId as string, p.path as string);
       case 'fs.unwatch':
@@ -159,14 +159,14 @@ class FsSession {
     }
   }
 
-  private async openFile(filePath: string): Promise<string> {
+  private async openFile(filePath: string): Promise<number> {
     const fh = await fsPromises.open(filePath, 'r');
-    const handle = `ws-fd-${this.nextHandle++}`;
+    const handle = this.nextHandle++;
     this.files.set(handle, fh);
     return handle;
   }
 
-  private async readFile(handle: string, offset: number, length: number): Promise<Buffer> {
+  private async readFile(handle: number, offset: number, length: number): Promise<Buffer> {
     const fh = this.files.get(handle);
     if (!fh) throw Object.assign(new Error('Invalid handle'), { code: 'EBADF' });
     const buf = Buffer.alloc(length);
@@ -174,7 +174,7 @@ class FsSession {
     return buf.subarray(0, bytesRead);
   }
 
-  private async closeFile(handle: string): Promise<void> {
+  private async closeFile(handle: number): Promise<void> {
     const fh = this.files.get(handle);
     if (fh) {
       await fh.close();

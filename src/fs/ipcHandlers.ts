@@ -7,12 +7,21 @@ import type { FsChangeEvent } from '../types';
 
 // ── Per-webContents resource tracking ────────────────────────────────
 
-const localFdsByContents = new Map<number, Set<string>>();
+const localFdsByContents = new Map<number, Set<number>>();
 const localWatchesByContents = new Map<number, Set<string>>();
-const proxyFdsByContents = new Map<number, Set<string>>();
+const proxyFdsByContents = new Map<number, Set<number>>();
 const proxyWatchesByContents = new Map<number, Set<string>>();
 
-function trackSet(map: Map<number, Set<string>>, contentsId: number, id: string): void {
+function trackFd(map: Map<number, Set<number>>, contentsId: number, fd: number): void {
+  let set = map.get(contentsId);
+  if (!set) {
+    set = new Set();
+    map.set(contentsId, set);
+  }
+  set.add(fd);
+}
+
+function trackWatch(map: Map<number, Set<string>>, contentsId: number, id: string): void {
   let set = map.get(contentsId);
   if (!set) {
     set = new Set();
@@ -97,7 +106,7 @@ export function cleanupContents(contentsId: number): void {
   // Clean up local fds
   const localFds = localFdsByContents.get(contentsId);
   if (localFds) {
-    for (const fdId of localFds) nativeFs.close(fdId).catch(() => {});
+    for (const fd of localFds) nativeFs.close(fd).catch(() => {});
   }
   localFdsByContents.delete(contentsId);
 
@@ -113,7 +122,7 @@ export function cleanupContents(contentsId: number): void {
   if (p?.isAlive) {
     const fds = proxyFdsByContents.get(contentsId);
     if (fds) {
-      for (const fdId of fds) p.close(fdId).catch(() => {});
+      for (const fd of fds) p.close(fd).catch(() => {});
     }
     const watches = proxyWatchesByContents.get(contentsId);
     if (watches) {
@@ -145,44 +154,44 @@ export function registerFsHandlers(): void {
     'fsa:open',
     withErrorHandling(async (event, filePath: string) => {
       try {
-        const fdId = await nativeFs.open(filePath);
-        trackSet(localFdsByContents, event.sender.id, fdId);
-        return fdId;
+        const fd = await nativeFs.open(filePath);
+        trackFd(localFdsByContents, event.sender.id, fd);
+        return fd;
       } catch (err) {
         if (!isElevatable(err)) throw err;
         const p = await getProxy();
-        const fdId = await p.open(filePath);
-        trackSet(proxyFdsByContents, event.sender.id, fdId);
-        return fdId;
+        const fd = await p.open(filePath);
+        trackFd(proxyFdsByContents, event.sender.id, fd);
+        return fd;
       }
     }),
   );
 
   ipcMain.handle(
     'fsa:read',
-    withErrorHandling(async (_event, fdId: string, offset: number, length: number) => {
-      if (fdId.startsWith('proxy:')) {
+    withErrorHandling(async (_event, fd: number, offset: number, length: number) => {
+      if (fd < 0) {
         const p = proxy;
         if (!p?.isAlive) throw new Error('Elevated FS service is not connected');
-        const buf = await p.read(fdId, offset, length);
+        const buf = await p.read(fd, offset, length);
         return buf instanceof Buffer ? buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) : buf;
       }
-      const buf = await nativeFs.read(fdId, offset, length);
+      const buf = await nativeFs.read(fd, offset, length);
       return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
     }),
   );
 
   ipcMain.handle(
     'fsa:close',
-    withErrorHandling(async (event, fdId: string) => {
-      if (fdId.startsWith('proxy:')) {
-        proxyFdsByContents.get(event.sender.id)?.delete(fdId);
+    withErrorHandling(async (event, fd: number) => {
+      if (fd < 0) {
+        proxyFdsByContents.get(event.sender.id)?.delete(fd);
         const p = proxy;
         if (!p?.isAlive) return;
-        return p.close(fdId);
+        return p.close(fd);
       }
-      localFdsByContents.get(event.sender.id)?.delete(fdId);
-      return nativeFs.close(fdId);
+      localFdsByContents.get(event.sender.id)?.delete(fd);
+      return nativeFs.close(fd);
     }),
   );
 
@@ -191,13 +200,13 @@ export function registerFsHandlers(): void {
     withErrorHandling(async (event, watchId: string, dirPath: string) => {
       try {
         const result = await nativeFs.watch(watchId, dirPath);
-        if (result.ok) trackSet(localWatchesByContents, event.sender.id, watchId);
+        if (result.ok) trackWatch(localWatchesByContents, event.sender.id, watchId);
         return result;
       } catch (err) {
         if (!isElevatable(err)) throw err;
         const p = await getProxy();
         const result = await p.watch(watchId, dirPath);
-        trackSet(proxyWatchesByContents, event.sender.id, watchId);
+        trackWatch(proxyWatchesByContents, event.sender.id, watchId);
         return result;
       }
     }),

@@ -6,8 +6,8 @@ contextBridge.exposeInMainWorld('electron', {
     stat: (filePath: string) => ipcRenderer.invoke('fsa:stat', filePath),
     exists: (filePath: string) => ipcRenderer.invoke('fsa:exists', filePath),
     open: (filePath: string) => ipcRenderer.invoke('fsa:open', filePath),
-    read: (fd: string, offset: number, length: number) => ipcRenderer.invoke('fsa:read', fd, offset, length),
-    close: (fd: string) => ipcRenderer.invoke('fsa:close', fd),
+    read: (fd: number, offset: number, length: number) => ipcRenderer.invoke('fsa:read', fd, offset, length),
+    close: (fd: number) => ipcRenderer.invoke('fsa:close', fd),
     watch: (watchId: string, path: string) => ipcRenderer.invoke('fsa:watch', watchId, path),
     unwatch: (watchId: string) => ipcRenderer.invoke('fsa:unwatch', watchId),
     onFsChange: (callback: (event: { watchId: string; type: string; name: string | null }) => void) => {

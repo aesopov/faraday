@@ -31,10 +31,7 @@ pub const StatResult = struct {
 // ── File-descriptor table ────────────────────────────────────────────
 
 pub const FdTable = struct {
-    const Entry = struct { id: []u8, file: std.fs.File };
-
-    entries: std.ArrayList(Entry) = .empty,
-    next_id: u32 = 0,
+    map: std.AutoHashMapUnmanaged(std.fs.File.Handle, void) = .empty,
     allocator: Allocator,
 
     pub fn init(allocator: Allocator) FdTable {
@@ -42,40 +39,47 @@ pub const FdTable = struct {
     }
 
     pub fn deinit(self: *FdTable) void {
-        for (self.entries.items) |*e| {
-            e.file.close();
-            self.allocator.free(e.id);
+        var it = self.map.keyIterator();
+        while (it.next()) |handle| {
+            (std.fs.File{ .handle = handle.* }).close();
         }
-        self.entries.deinit(self.allocator);
+        self.map.deinit(self.allocator);
     }
 
-    pub fn add(self: *FdTable, file: std.fs.File) ![]const u8 {
-        var buf: [32]u8 = undefined;
-        const id = std.fmt.bufPrint(&buf, "fd-{d}", .{self.next_id}) catch unreachable;
-        self.next_id += 1;
-        const owned = try self.allocator.dupe(u8, id);
-        try self.entries.append(self.allocator, .{ .id = owned, .file = file });
-        return owned;
+    pub fn track(self: *FdTable, file: std.fs.File) !void {
+        try self.map.put(self.allocator, file.handle, {});
     }
 
-    pub fn get(self: *const FdTable, id: []const u8) ?std.fs.File {
-        for (self.entries.items) |e| {
-            if (std.mem.eql(u8, e.id, id)) return e.file;
-        }
-        return null;
+    pub fn contains(self: *const FdTable, handle: std.fs.File.Handle) bool {
+        return self.map.contains(handle);
     }
 
-    pub fn remove(self: *FdTable, id: []const u8) void {
-        for (self.entries.items, 0..) |e, i| {
-            if (std.mem.eql(u8, e.id, id)) {
-                e.file.close();
-                self.allocator.free(e.id);
-                _ = self.entries.orderedRemove(i);
-                return;
-            }
+    pub fn remove(self: *FdTable, handle: std.fs.File.Handle) void {
+        if (self.map.fetchRemove(handle)) |_| {
+            (std.fs.File{ .handle = handle }).close();
         }
     }
 };
+
+// ── Handle ↔ i32 conversion ─────────────────────────────────────────
+// On POSIX, File.Handle is fd_t (i32) — identity conversion.
+// On Windows, File.Handle is HANDLE (*anyopaque) — cast via @intFromPtr.
+
+pub fn handleToI32(handle: std.fs.File.Handle) i32 {
+    if (comptime builtin.os.tag == .windows) {
+        return @intCast(@intFromPtr(handle));
+    } else {
+        return handle;
+    }
+}
+
+pub fn i32ToHandle(id: i32) std.fs.File.Handle {
+    if (comptime builtin.os.tag == .windows) {
+        return @ptrFromInt(@as(usize, @intCast(@as(u32, @bitCast(id)))));
+    } else {
+        return id;
+    }
+}
 
 // ── Operations ───────────────────────────────────────────────────────
 
@@ -173,17 +177,18 @@ pub fn exists(file_path: []const u8) bool {
     return true;
 }
 
-pub fn open(file_path: []const u8, fdt: *FdTable) ![]const u8 {
+pub fn open(file_path: []const u8, fdt: *FdTable) !std.fs.File.Handle {
     const f = try std.fs.openFileAbsolute(file_path, .{});
-    const id = fdt.add(f) catch |err| {
+    fdt.track(f) catch |err| {
         f.close();
         return err;
     };
-    return id;
+    return f.handle;
 }
 
-pub fn read(fd_id: []const u8, offset: i64, length: usize, fdt: *const FdTable, allocator: Allocator) ![]u8 {
-    const f = fdt.get(fd_id) orelse return error.InvalidHandle;
+pub fn read(handle: std.fs.File.Handle, offset: i64, length: usize, fdt: *const FdTable, allocator: Allocator) ![]u8 {
+    if (!fdt.contains(handle)) return error.InvalidHandle;
+    const f = std.fs.File{ .handle = handle };
     const buf = try allocator.alloc(u8, length);
     const n = f.pread(buf, @intCast(offset)) catch |err| {
         allocator.free(buf);
@@ -192,8 +197,8 @@ pub fn read(fd_id: []const u8, offset: i64, length: usize, fdt: *const FdTable, 
     return buf[0..n];
 }
 
-pub fn close(fd_id: []const u8, fdt: *FdTable) void {
-    fdt.remove(fd_id);
+pub fn close(handle: std.fs.File.Handle, fdt: *FdTable) void {
+    fdt.remove(handle);
 }
 
 /// Map a Zig error to an errno-style code string.
