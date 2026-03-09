@@ -62,6 +62,8 @@ jobs:
         with:
           version: 0.15.2
 
+      - uses: pnpm/action-setup@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 24
