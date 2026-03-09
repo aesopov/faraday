@@ -8,16 +8,16 @@ permissions:
   contents: write
 
 jobs:
-  build-zigar:
+  build:
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
-            platform: linux,win32
-            artifact: linux
+            platform: linux
           - os: macos-latest
             platform: darwin
-            artifact: darwin
+          - os: windows-latest
+            platform: win32
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -35,86 +35,17 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Filter targets for current platform
-        run: node -e "
-          const cfg = require('./node-zigar.config.json');
-          const platforms = '${{ matrix.platform }}'.split(',');
-          cfg.targets = cfg.targets.filter(t => platforms.includes(t.platform));
-          require('fs').writeFileSync('node-zigar.config.json', JSON.stringify(cfg, null, 2));
-          "
+      - run: node scripts/generate-zigar-config.mjs --platform ${{ matrix.platform }}
 
       - run: pnpm build:zigar
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: zigar-${{ matrix.artifact }}
-          path: lib/fs.zigar/
-
-  build-frdye:
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            artifact: linux
-          - os: macos-latest
-            artifact: macos
-          - os: windows-latest
-            artifact: windows
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
-
       - run: pnpm build:frdye
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: frdye-${{ matrix.artifact }}
-          path: zig/zig-out/
-
-  build:
-    needs: [build-zigar, build-frdye]
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            artifact: linux
-          - os: macos-latest
-            artifact: macos
-          - os: windows-latest
-            artifact: windows
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: zigar-*
-          path: lib/fs.zigar/
-          merge-multiple: true
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: frdye-${{ matrix.artifact }}
-          path: zig/zig-out/
 
       - run: pnpm make
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.artifact }}
+          name: dist-${{ matrix.platform }}
           path: out/make/**/*
 
   release:

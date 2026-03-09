@@ -11,7 +11,8 @@
     "make": "electron-forge make",
     "publish": "pnpm build:native && electron-forge publish",
     "lint": "eslint",
-    "build:zigar": "zigar build",
+    "generate:zigar-config": "node scripts/generate-zigar-config.mjs",
+    "build:zigar": "pnpm generate:zigar-config && zigar build",
     "build:frdye": "cd zig && zig build -Doptimize=ReleaseSmall",
     "build:native": "pnpm build:zigar && pnpm build:frdye"
   },

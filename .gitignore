@@ -96,5 +96,6 @@ zig/zig-out/
 zig/.zig-cache/
 
 # Zigar build artifacts
+node-zigar.config.json
 lib/fs.zigar/
 lib/node-zigar-addon/
