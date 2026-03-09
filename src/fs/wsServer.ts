@@ -4,9 +4,11 @@
 // server can run standalone outside of Electron.
 
 import { WebSocketServer, WebSocket } from 'ws';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import fs from 'node:fs';
 import fsPromises from 'node:fs/promises';
 import path from 'node:path';
+import os from 'node:os';
 import type { FsaRawEntry } from './types';
 import type { FsChangeType } from '../types';
 
@@ -28,8 +30,10 @@ class FsSession {
   private nextHandle = 1;
   private files = new Map<number, fsPromises.FileHandle>();
   private watches = new Map<string, fs.FSWatcher>();
+  private appPath?: string;
 
-  constructor(private ws: WebSocket) {
+  constructor(private ws: WebSocket, appPath?: string) {
+    this.appPath = appPath;
     ws.on('message', (data: Buffer | ArrayBuffer | Buffer[], isBinary: boolean) => {
       if (!isBinary) {
         this.handleText(data.toString());
@@ -90,6 +94,10 @@ class FsSession {
         return this.watch(p.watchId as string, p.path as string);
       case 'fs.unwatch':
         return this.unwatch(p.watchId as string);
+      case 'utils.getAppPath':
+        return this.appPath ?? process.cwd();
+      case 'utils.getHomePath':
+        return os.homedir();
       default:
         throw Object.assign(new Error(`Unknown method: ${msg.method}`), { code: 'EINVAL' });
     }
@@ -253,4 +261,91 @@ export function startFsServer(options: FsServerOptions): WebSocketServer {
     new FsSession(ws);
   });
   return wss;
+}
+
+// ── Headless server (HTTP static + WebSocket FS) ────────────────────
+
+const MIME_TYPES: Record<string, string> = {
+  '.html': 'text/html',
+  '.js': 'application/javascript',
+  '.css': 'text/css',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+};
+
+export interface HeadlessServerOptions {
+  port: number;
+  host?: string;
+  staticDir: string;
+  appPath: string;
+}
+
+export function startHeadlessServer(options: HeadlessServerOptions): void {
+  const { port, host = '127.0.0.1', staticDir, appPath } = options;
+
+  const hasStaticFiles = fs.existsSync(path.join(staticDir, 'index.html'));
+
+  function serveStatic(req: IncomingMessage, res: ServerResponse): void {
+    let urlPath = new URL(req.url!, 'http://localhost').pathname;
+    if (urlPath === '/') urlPath = '/index.html';
+
+    const filePath = path.join(staticDir, urlPath);
+    if (!filePath.startsWith(staticDir)) {
+      res.writeHead(403);
+      res.end();
+      return;
+    }
+
+    fs.readFile(filePath, (err, data) => {
+      if (err) {
+        if (err.code === 'ENOENT') {
+          fs.readFile(path.join(staticDir, 'index.html'), (err2, html) => {
+            if (err2) { res.writeHead(404); res.end('Not found'); }
+            else { res.writeHead(200, { 'Content-Type': 'text/html' }); res.end(html); }
+          });
+        } else {
+          res.writeHead(500);
+          res.end();
+        }
+        return;
+      }
+      const ext = path.extname(filePath);
+      const contentType = MIME_TYPES[ext] || 'application/octet-stream';
+      res.writeHead(200, { 'Content-Type': contentType });
+      res.end(data);
+    });
+  }
+
+  const server = createServer((req, res) => {
+    if (hasStaticFiles) {
+      serveStatic(req, res);
+    } else {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end(`Faraday WebSocket server running. Connect the web UI to ws://${host}:${port}/ws`);
+    }
+  });
+
+  const wss = new WebSocketServer({ noServer: true });
+  wss.on('connection', (ws) => new FsSession(ws, appPath));
+
+  server.on('upgrade', (req, socket, head) => {
+    if (new URL(req.url!, 'http://localhost').pathname === '/ws') {
+      wss.handleUpgrade(req, socket, head, (ws) => wss.emit('connection', ws, req));
+    } else {
+      socket.destroy();
+    }
+  });
+
+  server.listen(port, host, () => {
+    console.log(`Faraday headless server listening on http://${host}:${port}`);
+    if (hasStaticFiles) {
+      console.log(`Serving web UI from ${staticDir}`);
+    }
+    console.log(`WebSocket endpoint: ws://${host}:${port}/ws`);
+  });
 }

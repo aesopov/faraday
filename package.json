@@ -14,7 +14,9 @@
     "generate:zigar-config": "node scripts/generate-zigar-config.mjs",
     "build:zigar": "pnpm generate:zigar-config && zigar build",
     "build:frdye": "cd zig && zig build -Doptimize=ReleaseSmall",
-    "build:native": "pnpm build:zigar && pnpm build:frdye"
+    "build:native": "pnpm build:zigar && pnpm build:frdye",
+    "build:web": "vite build --config vite.web.config.ts",
+    "dev:web": "vite dev --config vite.web.config.ts"
   },
   "keywords": [],
   "author": {
