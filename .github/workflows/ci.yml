@@ -25,7 +25,16 @@ jobs:
 
   build-zigar:
     needs: lint
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux,win32
+            artifact: linux
+          - os: macos-latest
+            platform: darwin
+            artifact: darwin
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -42,37 +51,19 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: pnpm build:zigar
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: zigar-linux
-          path: lib/fs.zigar/
-
-  build-zigar-darwin:
-    needs: lint
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
+      - name: Filter targets for current platform
+        run: node -e "
+          const cfg = require('./node-zigar.config.json');
+          const platforms = '${{ matrix.platform }}'.split(',');
+          cfg.targets = cfg.targets.filter(t => platforms.includes(t.platform));
+          require('fs').writeFileSync('node-zigar.config.json', JSON.stringify(cfg, null, 2));
+          "
 
       - run: pnpm build:zigar
 
       - uses: actions/upload-artifact@v4
         with:
-          name: zigar-darwin
+          name: zigar-${{ matrix.artifact }}
           path: lib/fs.zigar/
 
   build-frdye:
@@ -105,7 +96,7 @@ jobs:
           path: zig/zig-out/
 
   build:
-    needs: [build-zigar, build-zigar-darwin, build-frdye]
+    needs: [build-zigar, build-frdye]
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
