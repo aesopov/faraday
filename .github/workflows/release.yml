@@ -35,11 +35,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - run: node scripts/generate-zigar-config.mjs --platform ${{ matrix.platform }}
-
-      - run: pnpm build:zigar
-
-      - run: pnpm build:frdye
+      - run: pnpm build:native
 
       - run: pnpm make
 

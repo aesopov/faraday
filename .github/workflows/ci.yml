@@ -23,80 +23,7 @@ jobs:
 
       - run: pnpm lint
 
-  build-zigar:
-    needs: lint
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            platform: linux,win32
-            artifact: linux
-          - os: macos-latest
-            platform: darwin
-            artifact: darwin
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - name: Filter targets for current platform
-        run: node -e "
-          const cfg = require('./node-zigar.config.json');
-          const platforms = '${{ matrix.platform }}'.split(',');
-          cfg.targets = cfg.targets.filter(t => platforms.includes(t.platform));
-          require('fs').writeFileSync('node-zigar.config.json', JSON.stringify(cfg, null, 2));
-          "
-
-      - run: pnpm build:zigar
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: zigar-${{ matrix.artifact }}
-          path: lib/fs.zigar/
-
-  build-frdye:
-    needs: lint
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
-
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - run: pnpm install --frozen-lockfile
-
-      - run: pnpm build:frdye
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: frdye-${{ matrix.os }}
-          path: zig/zig-out/
-
   build:
-    needs: [build-zigar, build-frdye]
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
@@ -111,17 +38,12 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
       - run: pnpm install --frozen-lockfile
 
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: zigar-*
-          path: lib/fs.zigar/
-          merge-multiple: true
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: frdye-${{ matrix.os }}
-          path: zig/zig-out/
+      - run: pnpm build:native
 
       - run: pnpm make
