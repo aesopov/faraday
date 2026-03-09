@@ -8,6 +8,7 @@ const posix = std.posix;
 const proto = @import("proto.zig");
 const ops = @import("ops.zig");
 const watch = @import("watch.zig");
+const fsevents = if (builtin.os.tag == .macos) @import("fsevents.zig") else struct {};
 
 const Allocator = std.mem.Allocator;
 
@@ -199,9 +200,25 @@ fn dispatch(
         .watch => {
             const wid = try reader.str();
             const path = try reader.str();
-            try out.u8_(if (watcher.addWatch(wid, path)) 1 else 0);
+            if (comptime builtin.os.tag == .macos) {
+                // Use FSEventsWatcher on macOS for file modification detection
+                if (g_fsevents) |*w| {
+                    try out.u8_(if (w.addWatch(wid, path)) 1 else 0);
+                } else {
+                    try out.u8_(0);
+                }
+            } else {
+                try out.u8_(if (watcher.addWatch(wid, path)) 1 else 0);
+            }
         },
-        .unwatch => watcher.removeWatch(try reader.str()),
+        .unwatch => {
+            const wid = try reader.str();
+            if (comptime builtin.os.tag == .macos) {
+                if (g_fsevents) |*w| w.removeWatch(wid);
+            } else {
+                watcher.removeWatch(wid);
+            }
+        },
         _ => return error.NotImplemented,
     }
 }
@@ -232,6 +249,8 @@ fn handleRequest(
 
 var g_sock: proto.File = .{ .handle = if (builtin.os.tag == .windows) std.os.windows.INVALID_HANDLE_VALUE else -1 };
 var g_allocator: Allocator = undefined;
+var g_fsevents: if (builtin.os.tag == .macos) ?fsevents.FSEventsWatcher else void =
+    if (builtin.os.tag == .macos) null else {};
 
 fn onWatchEvent(watch_id: []const u8, kind_str: []const u8, name: ?[]const u8) void {
     const kind: proto.EventType = if (std.mem.eql(u8, kind_str, "appeared"))
@@ -293,8 +312,10 @@ pub fn main() !void {
     var watcher = try watch.Watcher.init(allocator);
     defer watcher.deinit();
 
-    // Parent monitoring (macOS: via kqueue)
+    // macOS: use FSEventsWatcher for directory watching (detects file modifications).
+    // Keep kqueue watcher only for parent death monitoring.
     if (comptime builtin.os.tag == .macos) {
+        g_fsevents = try fsevents.FSEventsWatcher.init(allocator);
         watcher.watchParent(posix.system.getppid());
     }
 
@@ -369,6 +390,9 @@ pub fn main() !void {
         // Unix: poll on socket + optional watch fd
         const watch_fd = watcher.pollFd();
         const nfds: usize = if (watch_fd != null) 2 else 1;
+        // macOS: use short timeout to drain FSEvents buffer periodically.
+        // Linux: block indefinitely (inotify events come via watch_fd).
+        const poll_timeout: i32 = if (comptime builtin.os.tag == .macos) 200 else -1;
 
         while (true) {
             var pfds = [2]posix.pollfd{
@@ -376,7 +400,7 @@ pub fn main() !void {
                 .{ .fd = watch_fd orelse sock.handle, .events = posix.POLL.IN, .revents = 0 },
             };
 
-            _ = posix.poll(pfds[0..nfds], -1) catch break;
+            _ = posix.poll(pfds[0..nfds], poll_timeout) catch break;
 
             if (pfds[0].revents & posix.POLL.IN != 0) {
                 const n = msg_reader.fill(sock) catch break;
@@ -397,6 +421,16 @@ pub fn main() !void {
                 watcher.process(onWatchEvent);
                 if (watcher.parentDied()) break;
             }
+
+            // macOS: drain buffered FSEvents (GCD thread → this thread)
+            if (comptime builtin.os.tag == .macos) {
+                if (g_fsevents) |*w| w.drainEvents(onWatchEvent);
+            }
+        }
+
+        // Clean up FSEventsWatcher
+        if (comptime builtin.os.tag == .macos) {
+            if (g_fsevents) |*w| w.deinit();
         }
     }
 }

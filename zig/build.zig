@@ -13,5 +13,11 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         }),
     });
+
+    // Link CoreServices on macOS for FSEventsWatcher
+    if (target.result.os.tag == .macos) {
+        exe.linkFramework("CoreServices");
+    }
+
     b.installArtifact(exe);
 }
