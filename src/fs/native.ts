@@ -45,7 +45,9 @@ const native = loadNativeAddon();
 const ERRNO_RE = /\(([A-Z]+)\)$/;
 
 function toNodeError(err: unknown): never {
-  if (err instanceof Error && !('code' in err)) {
+  // napi-rs always sets code = "GenericFailure"; override it with the actual
+  // errno extracted from the message (e.g. "EACCES (EACCES)" → code "EACCES").
+  if (err instanceof Error) {
     const m = ERRNO_RE.exec(err.message);
     if (m) (err as NodeJS.ErrnoException).code = m[1];
   }
@@ -58,8 +60,10 @@ let watchCallbackFn: ((event: FsChangeEvent) => void) | null = null;
 
 export function initWatchCallback(cb: (event: FsChangeEvent) => void): void {
   watchCallbackFn = cb;
+  console.error('[watch] setting watch callback');
   native.setWatchCallback((watchId: string, kind: string, name: string | null) => {
     try {
+      console.error('[watch] event:', watchId, kind, name);
       if (!watchCallbackFn) return;
       watchCallbackFn({
         watchId,
