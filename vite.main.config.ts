@@ -4,9 +4,9 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   build: {
     rollupOptions: {
-      // ws has optional native deps (bufferutil, utf-8-validate) that
-      // can't be bundled — keep it as a Node.js require at runtime.
-      external: ['ws'],
+      // ws has optional native deps that Vite tries (and fails) to bundle.
+      // Mark them as external so ws itself is still inlined.
+      external: ['bufferutil', 'utf-8-validate'],
     },
   },
 });
