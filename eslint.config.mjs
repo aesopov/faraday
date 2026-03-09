@@ -4,7 +4,7 @@ import { defineConfig, globalIgnores } from 'eslint/config';
 import tseslint from 'typescript-eslint';
 
 export default defineConfig(
-  globalIgnores(['out', '.vite', 'scripts']),
+  globalIgnores(['out', '.vite', 'scripts', 'dist-web']),
   eslint.configs.recommended,
   {
     files: ['**/*.{js,mjs,cjs,jsx,mjsx,ts,mts,tsx,mtsx}'],

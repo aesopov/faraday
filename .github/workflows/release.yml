@@ -22,9 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
+      - uses: dtolnay/rust-toolchain@stable
 
       - uses: pnpm/action-setup@v4
 

@@ -18,7 +18,7 @@ function helperPath(): string {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, `frdye${ext}`);
   }
-  return path.join(app.getAppPath(), 'zig', 'zig-out', 'bin', `frdye${ext}`);
+  return path.join(app.getAppPath(), 'native', `frdye${ext}`);
 }
 
 function socketPath(): string {

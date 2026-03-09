@@ -6,39 +6,25 @@ import { FusesPlugin } from '@electron-forge/plugin-fuses';
 import { VitePlugin } from '@electron-forge/plugin-vite';
 import type { ForgeConfig } from '@electron-forge/shared-types';
 import { FuseV1Options, FuseVersion } from '@electron/fuses';
-import { cpSync, lstatSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { cpSync } from 'node:fs';
+import { join } from 'node:path';
 
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
     extraResource: ['assets'],
     afterCopyExtraResources: [
-      (buildPath, _electronVersion, platform, arch, callback) => {
+      (buildPath, _electronVersion, _platform, _arch, callback) => {
         let resources = join(buildPath, 'resources');
-        if (platform === 'darwin') {
+        if (_platform === 'darwin') {
           resources = join(buildPath, 'faraday.app', 'Contents', 'Resources');
         }
 
-        cpSync(join('zig', 'zig-out', 'bin'), join(resources), { recursive: true });
+        // Copy Rust-built N-API addon and frdye binary
+        const ext = _platform === 'win32' ? '.exe' : '';
+        cpSync(join('native', 'faraday_napi.node'), join(resources, 'faraday_napi.node'));
+        cpSync(join('native', `frdye${ext}`), join(resources, `frdye${ext}`));
 
-        cpSync('lib', join(resources, 'lib'), {
-          recursive: true,
-          filter: (src) => {
-            // if src is a directory, return true to copy it and its contents
-            if (lstatSync(src).isDirectory()) return true;
-
-            // only copy files with names {platform}.{arch}.*
-            const base = basename(src);
-            return base.startsWith(`${platform}.${arch}.`);
-          },
-        });
-
-        const nodeModules = 'node_modules';
-        const libs = ['node-zigar', 'node-zigar-addon', 'zigar-compiler'];
-        for (const lib of libs) {
-          cpSync(join(nodeModules, lib), join(resources, nodeModules, lib), { recursive: true });
-        }
         callback();
       },
     ],

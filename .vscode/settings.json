@@ -1,6 +1,3 @@
 {
-  "editor.formatOnSave": true,
-  "chat.tools.terminal.autoApprove": {
-    "zig": true
-  }
+  "editor.formatOnSave": true
 }

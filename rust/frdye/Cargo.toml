@@ -1,0 +1,13 @@
+[package]
+name = "frdye"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "frdye"
+
+[dependencies]
+faraday-core = { path = "../faraday-core" }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

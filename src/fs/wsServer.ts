@@ -1,6 +1,6 @@
 // WebSocket filesystem server — JSON-RPC 2.0 + binary frames.
 //
-// Uses Node.js fs for all operations (no zig dependency), so this
+// Uses Node.js fs for all operations (no native dependency), so this
 // server can run standalone outside of Electron.
 
 import { WebSocketServer, WebSocket } from 'ws';

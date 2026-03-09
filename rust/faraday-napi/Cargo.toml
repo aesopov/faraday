@@ -1,0 +1,15 @@
+[package]
+name = "faraday-napi"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+faraday-core = { path = "../faraday-core" }
+napi = { version = "2", features = ["napi8", "serde-json"] }
+napi-derive = "2"
+
+[build-dependencies]
+napi-build = "2"

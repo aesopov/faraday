@@ -32,7 +32,7 @@ if (isHeadless) {
   });
 } else {
   // ── Normal Electron GUI mode ────────────────────────────────────
-  // Dynamic imports to avoid loading the Zig native module in headless mode
+  // Dynamic imports to avoid loading the native addon in headless mode
   (async () => {
     const { registerFsHandlers, cleanupContents, cleanupAll } = await import('./fs/ipcHandlers');
     const { clearWatchCallback } = await import('./fs/native');

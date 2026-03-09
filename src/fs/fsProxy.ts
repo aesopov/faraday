@@ -121,7 +121,7 @@ export class FsProxy implements RawFs {
     const payload = await this.send(METHOD_ENTRIES, new BufWriter().str(dirPath).build());
     const r = new BufReader(payload);
     const count = r.u32();
-    // Must stay in sync with kindCode() in zig/src/main.zig
+    // Must stay in sync with EntryKind repr(u8) in rust/faraday-core/src/ops.rs
     const KIND_MAP: EntryKind[] = [
       'unknown',
       'file',

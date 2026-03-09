@@ -1,12 +1,12 @@
 # Faraday
 
-Dual-pane file manager built with Electron + React + Zig.
+Dual-pane file manager built with Electron + React + Rust.
 
 ## Tech Stack
 
 - **Renderer**: React 19, TypeScript 5.9, Vite 7
 - **Main process**: Electron 40, Node.js
-- **Native layer**: Zig (compiled via node-zigar for in-process bindings + standalone `frdye` elevated helper)
+- **Native layer**: Rust (napi-rs N-API addon for in-process bindings + standalone `frdye` elevated helper)
 - **Styling**: FSS (filesystem stylesheets) via `fss-lang` — custom CSS-like language for styling file listings
 - **Build**: Electron Forge, pnpm
 - **Targets**: macOS, Linux, Windows
@@ -22,7 +22,7 @@ src/
   langDetect.ts        # File language detection
   fs/
     types.ts           # RawFs interface, FsaRawEntry
-    native.ts          # node-zigar bindings (in-process Zig)
+    native.ts          # Rust napi-rs addon bindings
     elevate.ts         # Spawns privileged frdye helper
     fsProxy.ts         # IPC client for frdye (binary protocol over unix socket)
     ipcHandlers.ts     # Electron IPC handler registration
@@ -39,15 +39,11 @@ src/
     ImageViewer.tsx    # Image viewer
     ModalDialog.tsx    # Error/confirmation dialogs
     path.ts            # Cross-platform path utilities
-zig/
-  build.zig            # Zig build for frdye executable
-  src/
-    main.zig           # frdye — elevated FS helper (unix socket server)
-    proto.zig          # Binary protocol (mirrors src/protocol.ts)
-    ops.zig            # FS operations (entries, stat, read, watch)
-    fs_zigar.zig       # In-process Zig module exposed via node-zigar
-    fsevents.zig       # macOS FSEvents watcher
-    watch.zig          # Cross-platform watch abstraction
+rust/
+  Cargo.toml           # Workspace manifest
+  faraday-core/        # Pure Rust core: ops, proto, watch, error
+  faraday-napi/        # napi-rs N-API addon
+  frdye/               # Elevated FS helper binary
 ```
 
 ## Architecture
@@ -56,13 +52,13 @@ zig/
 
 The app accesses the filesystem through multiple backends, all conforming to `RawFs`:
 
-1. **Native (node-zigar)** — Zig compiled as a native Node addon via zigar. Used for direct in-process FS operations. Primary backend.
-2. **Elevated helper (frdye)** — Standalone Zig binary spawned with elevated privileges. Communicates over unix domain sockets (macOS/Linux) or named pipes (Windows) using a custom binary protocol.
+1. **Native (napi-rs)** — Rust compiled as a native Node addon via napi-rs. Used for direct in-process FS operations. Primary backend.
+2. **Elevated helper (frdye)** — Standalone Rust binary spawned with elevated privileges. Communicates over unix domain sockets (macOS/Linux) or named pipes (Windows) using a custom binary protocol.
 3. **WebSocket** — JSON-RPC 2.0 over WebSocket with binary frames for file data. Used for standalone/remote filesystem access.
 
 ### Binary IPC Protocol
 
-Custom length-prefixed binary protocol between TypeScript and Zig (`src/protocol.ts` ↔ `zig/src/proto.zig`):
+Custom length-prefixed binary protocol between TypeScript and Rust (`src/protocol.ts` ↔ `rust/faraday-core/src/proto.rs`):
 - Wire format: `[u32 LE payload length][payload]`
 - Types: u8, u16 LE, u32 LE, f64 LE, length-prefixed strings (u16 len + UTF-8), length-prefixed bytes (u32 len + data)
 - Message types: AUTH (0x01), REQUEST (0x02), RESPONSE (0x82), ERROR (0x83), EVENT (0x84)
@@ -77,17 +73,17 @@ Files are styled using `fss-lang` — a CSS-like language that matches filesyste
 ```bash
 pnpm dev              # Start dev server (electron-forge + vite)
 pnpm lint             # ESLint
-pnpm build:zigar      # Build Zig native module (node-zigar)
-pnpm build:frdye      # Build elevated helper binary
-pnpm build:native     # Build both Zig artifacts
+pnpm build:rust       # Build Rust native addon + frdye (release)
+pnpm build:rust:dev   # Build Rust (debug, faster)
+pnpm build:native     # Alias for build:rust
 pnpm package          # Build native + package Electron app
 pnpm make             # Create platform installers
 ```
 
 ## Key Conventions
 
-- Binary protocol changes must stay in sync between `src/protocol.ts` and `zig/src/proto.zig`
+- Binary protocol changes must stay in sync between `src/protocol.ts` and `rust/faraday-core/src/proto.rs`
 - All integers are little-endian in the wire protocol
-- File watcher events are polled every 50ms from Zig's in-memory event queue
+- File watcher events are delivered via napi-rs ThreadsafeFunction callbacks from the `notify` crate
 - The renderer uses a virtual scrolling approach for file lists
 - FSS cache is invalidated when `.faraday/fs.css` changes are detected via watch events
