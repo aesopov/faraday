@@ -60,10 +60,8 @@ let watchCallbackFn: ((event: FsChangeEvent) => void) | null = null;
 
 export function initWatchCallback(cb: (event: FsChangeEvent) => void): void {
   watchCallbackFn = cb;
-  console.error('[watch] setting watch callback');
   native.setWatchCallback((watchId: string, kind: string, name: string | null) => {
     try {
-      console.error('[watch] event:', watchId, kind, name);
       if (!watchCallbackFn) return;
       watchCallbackFn({
         watchId,
