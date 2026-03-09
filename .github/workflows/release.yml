@@ -84,7 +84,7 @@ jobs:
           path: zig/zig-out/
 
   build:
-    needs: [build-zigar, build-frdye]
+    needs: [build-zigar, build-zigar-darwin, build-frdye]
     strategy:
       matrix:
         include:
@@ -109,8 +109,9 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: zigar
+          pattern: zigar-*
           path: lib/fs.zigar/
+          merge-multiple: true
 
       - uses: actions/download-artifact@v4
         with:
