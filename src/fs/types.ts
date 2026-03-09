@@ -1,4 +1,15 @@
-export type EntryKind = 'file' | 'directory' | 'symlink' | 'block_device' | 'char_device' | 'named_pipe' | 'socket' | 'whiteout' | 'unknown';
+export type EntryKind =
+  | 'file'
+  | 'directory'
+  | 'symlink'
+  | 'block_device'
+  | 'char_device'
+  | 'named_pipe'
+  | 'socket'
+  | 'whiteout'
+  | 'door'
+  | 'event_port'
+  | 'unknown';
 
 export interface FsaRawEntry {
   name: string;

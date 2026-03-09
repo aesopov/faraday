@@ -326,6 +326,10 @@ export const FileList = memo(function FileList({ currentPath, parentNode, entrie
         return 'SOCK';
       case 'whiteout':
         return 'WHT';
+      case 'door':
+        return 'DOOR';
+      case 'event_port':
+        return 'EVT PORT';
       case 'unknown':
         return '?';
       default: {

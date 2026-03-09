@@ -94,12 +94,20 @@ const WatchEntry = struct {
     stream: FSEventStreamRef,
 };
 
+/// Buffered event produced by the GCD callback, consumed by the poll thread.
+pub const QueuedEvent = struct {
+    watch_id: []u8,
+    kind: []u8,
+    name: ?[]u8,
+};
+
 pub const FSEventsWatcher = struct {
     watches: std.ArrayList(WatchEntry),
     allocator: Allocator,
     queue: dispatch_queue_t,
-    callback: ?EventCallback = null,
     mutex: std.Thread.Mutex = .{},
+    // Event buffer: GCD callback pushes, poll thread drains.
+    events: std.ArrayList(QueuedEvent) = .empty,
 
     pub fn init(allocator: Allocator) !FSEventsWatcher {
         const q = dispatch_queue_create("dev.faraday.fsevents", null) orelse
@@ -120,6 +128,12 @@ pub const FSEventsWatcher = struct {
             self.allocator.free(entry.path);
         }
         self.watches.deinit(self.allocator);
+        for (self.events.items) |ev| {
+            self.allocator.free(ev.watch_id);
+            self.allocator.free(ev.kind);
+            if (ev.name) |n| self.allocator.free(n);
+        }
+        self.events.deinit(self.allocator);
     }
 
     pub fn addWatch(self: *FSEventsWatcher, id: []const u8, dir_path: []const u8) bool {
@@ -228,6 +242,28 @@ pub const FSEventsWatcher = struct {
         FSEventStreamRelease(stream);
     }
 
+    /// Drain buffered events, calling `cb` for each. Called from the poll thread.
+    pub fn drainEvents(self: *FSEventsWatcher, cb: EventCallback) void {
+        self.mutex.lock();
+        const items = self.events.toOwnedSlice(self.allocator) catch return;
+        self.mutex.unlock();
+
+        defer self.allocator.free(items);
+        for (items) |ev| {
+            cb(ev.watch_id, ev.kind, ev.name);
+            self.allocator.free(ev.watch_id);
+            self.allocator.free(ev.kind);
+            if (ev.name) |n| self.allocator.free(n);
+        }
+    }
+
+    /// Returns true if there are buffered events waiting.
+    pub fn hasEvents(self: *FSEventsWatcher) bool {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.events.items.len > 0;
+    }
+
     fn fsEventsCallback(
         stream: ConstFSEventStreamRef,
         info: ?*anyopaque,
@@ -240,7 +276,6 @@ pub const FSEventsWatcher = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const cb = self.callback orelse return;
         const paths: [*]const [*:0]const u8 = @ptrCast(@alignCast(event_paths orelse return));
 
         // Find which watch entry this stream belongs to
@@ -282,7 +317,13 @@ pub const FSEventsWatcher = struct {
             else
                 "unknown";
 
-            cb(wid, kind, relative);
+            // Buffer the event — it will be drained by the poll thread
+            // which runs in a std.Thread.spawn'd context (safe for zigar).
+            self.events.append(self.allocator, .{
+                .watch_id = self.allocator.dupe(u8, wid) catch continue,
+                .kind = self.allocator.dupe(u8, kind) catch continue,
+                .name = self.allocator.dupe(u8, relative) catch continue,
+            }) catch continue;
         }
     }
 };

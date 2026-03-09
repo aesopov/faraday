@@ -23,12 +23,22 @@ function loadZigFs() {
 }
 
 const zigFs = loadZigFs();
+zigFs.startup();
 
 // ── Zigar helpers ───────────────────────────────────────────────────
 
-/** Convert a zigar []const u8 slice to a JS string. */
-function zigStr(slice: { valueOf(): number[] }): string {
-  return Buffer.from(slice.valueOf()).toString('utf-8');
+/** Convert a zigar []const u8 slice to a JS string.
+ *  Cross-thread calls may present slices differently, so handle multiple formats. */
+function zigStr(slice: unknown): string {
+  if (typeof slice === 'string') return slice;
+  if (slice instanceof Uint8Array || slice instanceof Buffer || ArrayBuffer.isView(slice)) {
+    return Buffer.from(slice as Uint8Array).toString('utf-8');
+  }
+  if (slice && typeof (slice as { valueOf(): unknown }).valueOf === 'function') {
+    const val = (slice as { valueOf(): unknown }).valueOf();
+    return Buffer.from(val as number[]).toString('utf-8');
+  }
+  return String(slice);
 }
 
 // ── Zig error → Node.js errno mapping ───────────────────────────────
@@ -64,36 +74,32 @@ function toNodeError(err: unknown): never {
   throw err;
 }
 
-// ── Watch polling ───────────────────────────────────────────────────
+// ── Watch callback (push-based) ─────────────────────────────────────
 
-let pollTimer: ReturnType<typeof setInterval> | null = null;
-let watchCallback: ((event: FsChangeEvent) => void) | null = null;
+let watchCallbackFn: ((event: FsChangeEvent) => void) | null = null;
 
 export function initWatchCallback(cb: (event: FsChangeEvent) => void): void {
-  watchCallback = cb;
-  if (!pollTimer) {
-    pollTimer = setInterval(() => {
-      if (!watchCallback) return;
-      const events = zigFs.pollWatchEvents();
-      if (!events) return;
-      for (const ev of events) {
-        const name = ev.name;
-        watchCallback({
-          watchId: zigStr(ev.watch_id),
-          type: zigStr(ev.kind) as FsChangeType,
-          name: name != null ? zigStr(name) : null,
-        });
-      }
-    }, 50);
-  }
+  watchCallbackFn = cb;
+  // zigar wraps this JS function as a napi_threadsafe_function,
+  // so the Zig watch thread can call it cross-thread safely.
+  // IMPORTANT: Must never throw — an unhandled exception panics the Zig thread.
+  zigFs.setWatchCallback((watchId: unknown, kind: unknown, name: unknown) => {
+    try {
+      if (!watchCallbackFn) return;
+      watchCallbackFn({
+        watchId: zigStr(watchId),
+        type: zigStr(kind) as FsChangeType,
+        name: name != null ? zigStr(name) : null,
+      });
+    } catch (err) {
+      console.error('[watch] callback error:', err);
+    }
+  });
 }
 
-export function stopWatchPolling(): void {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-  watchCallback = null;
+export function clearWatchCallback(): void {
+  watchCallbackFn = null;
+  zigFs.setWatchCallback(null);
 }
 
 // ── NativeFs — unified RawFs using the Zig zigar module ─────────────

@@ -1,16 +1,26 @@
 /// Filesystem API exposed to Node.js via zigar.
 ///
-/// Watch events use a polling model: call pollWatchEvents() periodically
-/// (e.g. every 50ms) to retrieve accumulated events from the watch thread.
+/// Watch events use a push model: call setWatchCallback() with a JS function
+/// that receives (watch_id, kind, name) on each filesystem event. Zigar
+/// wraps the callback as a napi_threadsafe_function for cross-thread safety.
 ///
-/// On macOS, kqueue detects directory structural changes (create/delete/rename)
-/// but not file content modifications. For content changes the TypeScript
-/// layer can supplement with periodic stat polling.
+/// On macOS, FSEventsWatcher is used for file-level modification detection.
+/// On Linux, inotify is used. On Windows, ReadDirectoryChangesW.
 const std = @import("std");
 const builtin = @import("builtin");
 const posix = std.posix;
 const ops = @import("ops.zig");
 const watch_mod = @import("watch.zig");
+const fsevents = if (builtin.os.tag == .macos) @import("fsevents.zig") else struct {};
+const zigar = @import("zigar");
+
+pub fn startup() !void {
+    try zigar.thread.use();
+}
+
+pub fn shutdown() void {
+    zigar.thread.end();
+}
 
 // ── Directory listing ──────────────────────────────────────────────
 
@@ -59,88 +69,52 @@ pub fn close(fd: i32) void {
 
 // ── Watch ──────────────────────────────────────────────────────────
 
-pub const WatchEvent = struct {
-    watch_id: []const u8,
-    kind: []const u8,
-    name: ?[]const u8,
-};
+/// JS callback type — zigar auto-wraps JS functions into this signature
+/// and handles cross-thread dispatch via napi_threadsafe_function.
+pub const WatchCallback = *const fn (watch_id: []const u8, kind: []const u8, name: ?[]const u8) void;
 
-const MAX_EVENTS = 256;
-const Slot = struct {
-    wid: [128]u8 = undefined,
-    wid_len: u8 = 0,
-    kind: [16]u8 = undefined,
-    kind_len: u8 = 0,
-    name: [512]u8 = undefined,
-    name_len: u16 = 0,
-    has_name: bool = false,
-};
+var g_watch_callback: ?WatchCallback = null;
 
-var ev_queue: [MAX_EVENTS]Slot = undefined;
-var ev_count: usize = 0;
-var ev_mu: std.Thread.Mutex = .{};
-
-fn pushEvent(watch_id: []const u8, kind: []const u8, name: ?[]const u8) void {
-    ev_mu.lock();
-    defer ev_mu.unlock();
-    if (ev_count >= MAX_EVENTS) {
-        std.mem.copyForwards(Slot, ev_queue[0 .. MAX_EVENTS - 1], ev_queue[1..MAX_EVENTS]);
-        ev_count = MAX_EVENTS - 1;
-    }
-    const s = &ev_queue[ev_count];
-    ev_count += 1;
-    const wl = @min(watch_id.len, s.wid.len);
-    @memcpy(s.wid[0..wl], watch_id[0..wl]);
-    s.wid_len = @intCast(wl);
-    const kl = @min(kind.len, s.kind.len);
-    @memcpy(s.kind[0..kl], kind[0..kl]);
-    s.kind_len = @intCast(kl);
-    if (name) |n| {
-        const nl = @min(n.len, s.name.len);
-        @memcpy(s.name[0..nl], n[0..nl]);
-        s.name_len = @intCast(nl);
-        s.has_name = true;
-    } else {
-        s.name_len = 0;
-        s.has_name = false;
-    }
-}
-
-var poll_arena = std.heap.ArenaAllocator.init(std.heap.c_allocator);
-
-/// Drain all pending watch events. The returned slice is valid until the
-/// next call to pollWatchEvents().
-pub fn pollWatchEvents() []const WatchEvent {
-    _ = poll_arena.reset(.free_all);
-    const a = poll_arena.allocator();
-
-    ev_mu.lock();
-    const n = ev_count;
-    ev_count = 0;
-    const snapshot = a.dupe(Slot, ev_queue[0..n]) catch {
-        ev_mu.unlock();
-        return &.{};
-    };
-    ev_mu.unlock();
-
-    const result = a.alloc(WatchEvent, n) catch return &.{};
-    for (snapshot, 0..) |s, i| {
-        result[i] = .{
-            .watch_id = a.dupe(u8, s.wid[0..s.wid_len]) catch "",
-            .kind = a.dupe(u8, s.kind[0..s.kind_len]) catch "",
-            .name = if (s.has_name) a.dupe(u8, s.name[0..s.name_len]) catch null else null,
-        };
-    }
-    return result;
-}
-
+// macOS: FSEventsWatcher detects file modifications via FSEvents + GCD.
+// Events are buffered and drained by the watchThread (std.Thread.spawn'd,
+// which zigar can safely use for cross-thread JS callbacks).
+// Linux/Windows: kqueue/inotify watcher with a polling thread.
+var g_fsevents_watcher: if (builtin.os.tag == .macos) ?fsevents.FSEventsWatcher else void =
+    if (builtin.os.tag == .macos) null else {};
 var g_watcher: ?watch_mod.Watcher = null;
 var g_watch_thread: ?std.Thread = null;
 var g_watch_mu: std.Thread.Mutex = .{};
 var g_watch_stop = std.atomic.Value(bool).init(false);
 
+/// Called from the watch thread — zigar marshals this to the JS main thread.
+fn onWatchEvent(watch_id: []const u8, kind: []const u8, name: ?[]const u8) void {
+    if (g_watch_callback) |cb| cb(watch_id, kind, name);
+}
+
+pub fn setWatchCallback(cb: ?WatchCallback) void {
+    // Release the old Zig-to-JS bridge to free memory and allow GC of the JS function.
+    if (g_watch_callback) |old| zigar.function.release(old);
+    g_watch_callback = cb;
+}
+
 pub fn watch(watch_id: []const u8, dir_path: []const u8) !bool {
     std.fs.accessAbsolute(dir_path, .{}) catch |err| return err;
+
+    if (comptime builtin.os.tag == .macos) {
+        g_watch_mu.lock();
+        defer g_watch_mu.unlock();
+
+        if (g_fsevents_watcher == null) {
+            g_fsevents_watcher = try fsevents.FSEventsWatcher.init(std.heap.c_allocator);
+        }
+        _ = g_fsevents_watcher.?.addWatch(watch_id, dir_path);
+
+        if (g_watch_thread == null) {
+            g_watch_stop.store(false, .release);
+            g_watch_thread = try std.Thread.spawn(.{}, watchThread, .{});
+        }
+        return true;
+    }
 
     g_watch_mu.lock();
     defer g_watch_mu.unlock();
@@ -158,6 +132,10 @@ pub fn watch(watch_id: []const u8, dir_path: []const u8) !bool {
 }
 
 pub fn unwatch(watch_id: []const u8) void {
+    if (comptime builtin.os.tag == .macos) {
+        if (g_fsevents_watcher) |*w| w.removeWatch(watch_id);
+        return;
+    }
     g_watch_mu.lock();
     defer g_watch_mu.unlock();
     if (g_watcher) |*w| w.removeWatch(watch_id);
@@ -165,10 +143,22 @@ pub fn unwatch(watch_id: []const u8) void {
 
 fn watchThread() void {
     while (!g_watch_stop.load(.acquire)) {
-        if (comptime builtin.os.tag == .windows)
+        if (comptime builtin.os.tag == .macos)
+            watchPollMacOS()
+        else if (comptime builtin.os.tag == .windows)
             watchPollWindows()
         else
             watchPollUnix();
+    }
+}
+
+fn watchPollMacOS() void {
+    // FSEvents fires callbacks on a GCD thread which buffers events.
+    // We drain them here on a std.Thread.spawn'd thread so zigar can
+    // safely dispatch to the JS main thread.
+    std.Thread.sleep(100_000_000); // 100ms
+    if (comptime builtin.os.tag == .macos) {
+        if (g_fsevents_watcher) |*w| w.drainEvents(onWatchEvent);
     }
 }
 
@@ -186,7 +176,7 @@ fn watchPollUnix() void {
     if (pfds[0].revents & posix.POLL.IN != 0) {
         g_watch_mu.lock();
         defer g_watch_mu.unlock();
-        if (g_watcher) |*w| w.process(pushEvent);
+        if (g_watcher) |*w| w.process(onWatchEvent);
     }
 }
 
@@ -209,6 +199,6 @@ fn watchPollWindows() void {
     if (idx < n) {
         g_watch_mu.lock();
         defer g_watch_mu.unlock();
-        if (g_watcher) |*watcher| watcher.processEventAt(idx, pushEvent);
+        if (g_watcher) |*watcher| watcher.processEventAt(idx, onWatchEvent);
     }
 }

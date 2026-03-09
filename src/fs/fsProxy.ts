@@ -122,7 +122,19 @@ export class FsProxy implements RawFs {
     const r = new BufReader(payload);
     const count = r.u32();
     // Must stay in sync with kindCode() in zig/src/main.zig
-    const KIND_MAP: EntryKind[] = ['unknown', 'file', 'directory', 'symlink', 'block_device', 'char_device', 'named_pipe', 'socket', 'whiteout'];
+    const KIND_MAP: EntryKind[] = [
+      'unknown',
+      'file',
+      'directory',
+      'symlink',
+      'block_device',
+      'char_device',
+      'named_pipe',
+      'socket',
+      'whiteout',
+      'door',
+      'event_port',
+    ];
     const entries = [];
     for (let i = 0; i < count; i++) {
       const name = r.str();

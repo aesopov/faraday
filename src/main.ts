@@ -3,7 +3,7 @@ import started from 'electron-squirrel-startup';
 import os from 'node:os';
 import path from 'node:path';
 import { registerFsHandlers, cleanupContents, cleanupAll } from './fs/ipcHandlers';
-import { stopWatchPolling } from './fs/native';
+import { clearWatchCallback } from './fs/native';
 
 if (started) {
   app.quit();
@@ -47,7 +47,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('will-quit', () => {
-  stopWatchPolling();
+  clearWatchCallback();
   cleanupAll();
 });
 

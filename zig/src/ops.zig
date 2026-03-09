@@ -11,8 +11,7 @@ const Allocator = std.mem.Allocator;
 
 pub const EntryInfo = struct {
     name: []const u8,
-    /// One of: "file" "directory" "symlink" "block_device" "char_device"
-    ///         "named_pipe" "socket" "whiteout" "unknown"
+    /// One of: "file" "directory" "symlink" "block_device" "char_device" "named_pipe" "socket" "whiteout" "door" "event_port" "unknown"
     kind: []const u8,
     size: f64,
     mtimeMs: f64,
@@ -93,6 +92,8 @@ fn entryKindStr(k: std.fs.Dir.Entry.Kind) []const u8 {
         .character_device => "char_device",
         .named_pipe => "named_pipe",
         .unix_domain_socket => "socket",
+        .door => "door",
+        .event_port => "event_port",
         .whiteout => "whiteout",
         else => "unknown",
     };

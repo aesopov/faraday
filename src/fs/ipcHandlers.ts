@@ -203,6 +203,8 @@ export function registerFsHandlers(): void {
         if (result.ok) trackWatch(localWatchesByContents, event.sender.id, watchId);
         return result;
       } catch (err) {
+        // Directory doesn't exist — not an error, just can't watch it
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { ok: false };
         if (!isElevatable(err)) throw err;
         const p = await getProxy();
         const result = await p.watch(watchId, dirPath);

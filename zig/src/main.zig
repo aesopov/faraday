@@ -129,7 +129,7 @@ fn sendEvent(allocator: Allocator, file: proto.File, watch_id: []const u8, kind:
 /// Encode an entry kind string as a compact u8 for the wire protocol.
 /// Must stay in sync with KIND_MAP in fsProxy.ts.
 /// 0=unknown 1=file 2=directory 3=symlink 4=block_device
-/// 5=char_device 6=named_pipe 7=socket 8=whiteout
+/// 5=char_device 6=named_pipe 7=socket 8=whiteout 9=door 10=event_port
 fn kindCode(kind: []const u8) u8 {
     if (std.mem.eql(u8, kind, "file")) return 1;
     if (std.mem.eql(u8, kind, "directory")) return 2;
@@ -139,6 +139,8 @@ fn kindCode(kind: []const u8) u8 {
     if (std.mem.eql(u8, kind, "named_pipe")) return 6;
     if (std.mem.eql(u8, kind, "socket")) return 7;
     if (std.mem.eql(u8, kind, "whiteout")) return 8;
+    if (std.mem.eql(u8, kind, "door")) return 9;
+    if (std.mem.eql(u8, kind, "event_port")) return 10;
     return 0;
 }
 
