@@ -5,7 +5,7 @@
 /// inotify, ReadDirectoryChangesW) behind a single RecommendedWatcher.
 use notify::{self, RecommendedWatcher, RecursiveMode, Watcher as NotifyWatcher};
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -44,16 +44,16 @@ pub struct FsWatcher {
     watcher: Mutex<RecommendedWatcher>,
     watches: Mutex<HashMap<String, WatchEntry>>,
     /// Shared with the notify callback closure for routing events.
-    path_to_id: Arc<Mutex<HashMap<PathBuf, String>>>,
+    path_to_ids: Arc<Mutex<HashMap<PathBuf, HashSet<String>>>>,
 }
 
 impl FsWatcher {
     /// Create a new watcher. The callback fires on a background thread for
     /// each filesystem event detected.
     pub fn new(cb: EventCallback) -> notify::Result<Self> {
-        let path_to_id: Arc<Mutex<HashMap<PathBuf, String>>> =
+        let path_to_ids: Arc<Mutex<HashMap<PathBuf, HashSet<String>>>> =
             Arc::new(Mutex::new(HashMap::new()));
-        let path_map = path_to_id.clone();
+        let path_map = path_to_ids.clone();
 
         let watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
             let event = match res {
@@ -74,9 +74,11 @@ impl FsWatcher {
                 // Find which watched directory it belongs to and extract the filename.
                 if let Some(parent) = path.parent() {
                     let parent_buf = parent.to_path_buf();
-                    if let Some(watch_id) = map.get(&parent_buf) {
+                    if let Some(watch_ids) = map.get(&parent_buf) {
                         let name = path.file_name().map(|n| n.to_string_lossy());
-                        cb(watch_id, kind, name.as_deref());
+                        for watch_id in watch_ids {
+                            cb(watch_id, kind, name.as_deref());
+                        }
                     }
                 }
             }
@@ -85,7 +87,7 @@ impl FsWatcher {
         Ok(Self {
             watcher: Mutex::new(watcher),
             watches: Mutex::new(HashMap::new()),
-            path_to_id,
+            path_to_ids,
         })
     }
 
@@ -100,18 +102,27 @@ impl FsWatcher {
         // Remove existing watch with this ID first
         self.remove(watch_id);
 
-        if self
-            .watcher
-            .lock()
-            .watch(&path, RecursiveMode::NonRecursive)
-            .is_err()
+        // Only register with notify if this path isn't already watched
         {
-            return false;
+            let ids = self.path_to_ids.lock();
+            let already_watched = ids.get(&path).is_some_and(|s| !s.is_empty());
+            if !already_watched {
+                if self
+                    .watcher
+                    .lock()
+                    .watch(&path, RecursiveMode::NonRecursive)
+                    .is_err()
+                {
+                    return false;
+                }
+            }
         }
 
-        self.path_to_id
+        self.path_to_ids
             .lock()
-            .insert(path.clone(), watch_id.to_string());
+            .entry(path.clone())
+            .or_default()
+            .insert(watch_id.to_string());
         self.watches
             .lock()
             .insert(watch_id.to_string(), WatchEntry { path });
@@ -121,8 +132,14 @@ impl FsWatcher {
     /// Stop watching a directory by watch ID.
     pub fn remove(&self, watch_id: &str) {
         if let Some(entry) = self.watches.lock().remove(watch_id) {
-            let _ = self.watcher.lock().unwatch(&entry.path);
-            self.path_to_id.lock().remove(&entry.path);
+            let mut ids = self.path_to_ids.lock();
+            if let Some(set) = ids.get_mut(&entry.path) {
+                set.remove(watch_id);
+                if set.is_empty() {
+                    ids.remove(&entry.path);
+                    let _ = self.watcher.lock().unwatch(&entry.path);
+                }
+            }
         }
     }
 }
@@ -191,5 +208,91 @@ mod tests {
             std::thread::sleep(Duration::from_millis(100));
         }
         assert!(got_event.load(Ordering::SeqCst));
+    }
+
+    /// Verify that passing a non-canonical path (e.g. /tmp → /private/tmp on macOS)
+    /// still detects events correctly.
+    #[test]
+    fn watch_non_canonical_path() {
+        let got = Arc::new(AtomicBool::new(false));
+        let got_clone = got.clone();
+
+        let cb: EventCallback = Arc::new(move |_id, kind, _name| {
+            if kind == EventKind::Appeared || kind == EventKind::Modified {
+                got_clone.store(true, Ordering::SeqCst);
+            }
+        });
+
+        let watcher = FsWatcher::new(cb).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        // Use the raw (potentially non-canonical) path
+        assert!(watcher.add("w1", dir.path().to_str().unwrap()));
+
+        std::thread::sleep(Duration::from_millis(500));
+
+        let canonical = dir.path().canonicalize().unwrap();
+        std::fs::File::create(canonical.join("test.txt")).unwrap();
+
+        for _ in 0..50 {
+            if got.load(Ordering::SeqCst) { break; }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(got.load(Ordering::SeqCst));
+    }
+
+    /// Two watches on the same directory must both receive events,
+    /// and removing one must not break the other.
+    #[test]
+    fn dual_watch_same_directory() {
+        use std::sync::atomic::AtomicU32;
+
+        let count_a = Arc::new(AtomicU32::new(0));
+        let count_b = Arc::new(AtomicU32::new(0));
+        let ca = count_a.clone();
+        let cb_count = count_b.clone();
+
+        let cb: EventCallback = Arc::new(move |id, kind, _name| {
+            if kind == EventKind::Appeared || kind == EventKind::Modified {
+                match id {
+                    "w-a" => { ca.fetch_add(1, Ordering::SeqCst); }
+                    "w-b" => { cb_count.fetch_add(1, Ordering::SeqCst); }
+                    _ => {}
+                }
+            }
+        });
+
+        let watcher = FsWatcher::new(cb).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let canonical = dir.path().canonicalize().unwrap();
+        let path = canonical.to_str().unwrap();
+
+        assert!(watcher.add("w-a", path));
+        assert!(watcher.add("w-b", path));
+
+        std::thread::sleep(Duration::from_millis(500));
+
+        // Both watches should receive the event
+        std::fs::File::create(canonical.join("file1.txt")).unwrap();
+
+        for _ in 0..50 {
+            if count_a.load(Ordering::SeqCst) > 0 && count_b.load(Ordering::SeqCst) > 0 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(count_a.load(Ordering::SeqCst) > 0, "watch A must receive events");
+        assert!(count_b.load(Ordering::SeqCst) > 0, "watch B must receive events");
+
+        // Remove one watch — the other must keep working
+        watcher.remove("w-a");
+        count_b.store(0, Ordering::SeqCst);
+
+        std::fs::File::create(canonical.join("file2.txt")).unwrap();
+
+        for _ in 0..50 {
+            if count_b.load(Ordering::SeqCst) > 0 { break; }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert!(count_b.load(Ordering::SeqCst) > 0, "watch B must still work after A removed");
     }
 }
